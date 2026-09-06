@@ -1,0 +1,9 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/ssg" },
+    { "path": "./packages/kavach" },
+    { "path": "./packages/netra" },
+    { "path": "./packages/extension" }
+  ]
+}

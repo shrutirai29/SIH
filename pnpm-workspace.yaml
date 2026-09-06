@@ -1,0 +1,7 @@
+packages:
+  - 'packages/*'
+  - 'tools/*'
+
+# esbuild ships a prebuilt binary and needs its install script to link it.
+allowBuilds:
+  esbuild: true

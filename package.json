@@ -1,0 +1,39 @@
+{
+  "name": "prahari",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Privacy-Respecting Agentic Hybrid Assistant for Redacted Interaction",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter @prahari/extension build",
+    "build:chrome": "pnpm --filter @prahari/extension build:chrome",
+    "build:firefox": "pnpm --filter @prahari/extension build:firefox",
+    "dev": "pnpm --filter @prahari/extension dev",
+    "server:mock": "node tools/mock-server/index.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --pretty",
+    "lint": "eslint .",
+    "verify": "pnpm gen:contract && git diff --exit-code -- packages/ssg/src/generated && pnpm typecheck && pnpm lint && pnpm lint:prove && pnpm test && pnpm build && pnpm check:bundle && pnpm test:e2e",
+    "lint:prove": "node scripts/prove-lint-rule.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "gen:contract": "pnpm --filter @prahari/ssg gen:contract",
+    "test:e2e": "playwright test",
+    "server": "node scripts/py.mjs -m app.main",
+    "test:server": "node scripts/py.mjs -m pytest tests/ -q",
+    "spike:s05": "node scripts/py.mjs -m spikes.s05_ssg_reasoning"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "eslint-plugin-prahari": "workspace:*",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^2.1.8"
+  },
+  "type": "module"
+}

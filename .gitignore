@@ -1,0 +1,27 @@
+node_modules/
+dist/
+dist-chrome/
+dist-firefox/
+*.zip
+*.xpi
+.turbo/
+coverage/
+.vite/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.local
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+models/weights/
+docs/metrics/*.json
+dist-types/
+test-results/
+playwright-report/
+
+# python
+server/.venv/
+server/.pytest_cache/

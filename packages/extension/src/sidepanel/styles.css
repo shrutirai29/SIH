@@ -1,0 +1,662 @@
+/* Side panel styling. Plain CSS on purpose for the skeleton: Tailwind 4 is in the
+   documented stack but adds build surface we do not need to prove the loop works. */
+
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --border: #e2e6ec;
+  --text: #16202e;
+  --muted: #67717f;
+  --accent: #2b3a4a;
+  --accent-soft: #6ea8fe;
+  --ok: #167a4a;
+  --bad: #b3261e;
+  --warn: #9a6700;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --surface: #1a1f27;
+    --border: #2b323d;
+    --text: #e7ecf3;
+    --muted: #99a3b1;
+    --accent: #cfe0ff;
+    --accent-soft: #6ea8fe;
+    --ok: #4ec98a;
+    --bad: #ff8a80;
+    --warn: #e8c56b;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.head {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mark {
+    color: #12161c;
+  }
+}
+
+h1 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.sub {
+  margin: 1px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------ tabs */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 10px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.tabs button {
+  border: 0;
+  background: none;
+  padding: 7px 12px;
+  border-radius: 7px 7px 0 0;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tabs button[aria-selected='true'] {
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: inset 0 -2px 0 var(--accent-soft);
+}
+
+/* ------------------------------------------------------------------ pane */
+
+.pane {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field span {
+  font-weight: 600;
+}
+
+textarea {
+  width: 100%;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+
+textarea:focus-visible {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  padding: 7px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent-soft);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  button.primary {
+    color: #12161c;
+  }
+}
+
+button.danger {
+  color: var(--bad);
+}
+
+/* ------------------------------------------------------------------ card */
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.card button {
+  align-self: flex-start;
+}
+
+.muted {
+  color: var(--muted);
+  margin: 0;
+}
+
+.pad {
+  padding: 8px 2px;
+}
+
+/* ---------------------------------------------------------------- status */
+
+.statusline {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge.tier {
+  border-color: var(--accent-soft);
+  color: var(--accent-soft);
+}
+
+.status.blocked {
+  border-color: var(--bad);
+}
+
+.status.blocked .msg {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.status.done {
+  border-color: var(--ok);
+}
+
+.status.error .msg {
+  color: var(--warn);
+}
+
+.msg {
+  margin: 0;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 2px 0 0;
+  width: 100%;
+}
+
+.metrics div {
+  background: var(--bg);
+  border-radius: 7px;
+  padding: 6px 7px;
+}
+
+.metrics dt {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metrics dd {
+  margin: 1px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.host {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- checks */
+
+.checks {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.checks li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.checks .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex: none;
+}
+
+.checks li.ok .dot {
+  background: var(--ok);
+}
+
+.checks li.bad .dot {
+  background: var(--bad);
+}
+
+.checks strong {
+  display: block;
+  font-weight: 600;
+}
+
+.checks em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 11px;
+}
+
+/* ---------------------------------------------------------------- ledger */
+
+.ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ledger li {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 9px;
+  background: var(--surface);
+  padding: 9px 10px;
+}
+
+.ledger li.sent {
+  border-left-color: var(--ok);
+}
+
+.ledger li.blocked {
+  border-left-color: var(--bad);
+}
+
+.lrow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.grow {
+  flex: 1;
+}
+
+.lmeta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 5px;
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.reason {
+  margin: 5px 0 0;
+  color: var(--bad);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.counts {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- footer */
+
+.foot {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  word-break: break-all;
+}
+
+/* ------------------------------------------------- diff viewer (ticket D16) */
+
+.diff {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dtitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+}
+
+button.link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent-soft);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+button.link:hover {
+  text-decoration: underline;
+}
+
+.dlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.drow {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+}
+
+/* A credential is not merely masked — nothing can bring it back. Say so visually. */
+.drow.irreversible {
+  border-left-color: var(--bad);
+}
+
+.dhead {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.badge.cls {
+  border-color: var(--accent-soft);
+  color: var(--accent-soft);
+  font-size: 10px;
+}
+
+.dbody {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sidelabel {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.side code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 4px 6px;
+}
+
+.side.after code.token {
+  color: var(--accent-soft);
+  font-weight: 600;
+}
+
+.arrow {
+  align-self: center;
+  color: var(--muted);
+  flex: none;
+}
+
+.dwhy {
+  margin: 6px 0 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+/* The byte-accurate pane. Scrolls in its own box so the panel never scrolls sideways. */
+.payload {
+  margin: 0;
+  max-height: 340px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  width: 100%;
+}
+
+.payload mark {
+  background: color-mix(in srgb, var(--accent-soft) 26%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+/* ------------------------------------------- overlay toggle + canary audit (D15/D17) */
+
+.toggle {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.toggle input {
+  margin-top: 2px;
+  accent-color: var(--accent-soft);
+  flex: none;
+}
+
+.toggle strong {
+  display: block;
+  font-weight: 600;
+}
+
+.toggle em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 11px;
+}
+
+.audit {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auditline {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.verdict {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.verdict.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.verdict.bad {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.verdict.neutral {
+  color: var(--muted);
+}
+
+.surfaces {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+}
+
+.surfaces li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+/* A surface nothing read is a gap in coverage, not a pass. Mark it as such. */
+.surfaces li.blind code {
+  color: var(--warn);
+}
+
+.surfaces li.blind {
+  opacity: 0.75;
+}

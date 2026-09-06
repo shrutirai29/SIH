@@ -1,0 +1,27 @@
+{
+  "name": "@prahari/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs chrome && node scripts/build.mjs firefox",
+    "build:chrome": "node scripts/build.mjs chrome",
+    "build:firefox": "node scripts/build.mjs firefox",
+    "dev": "node scripts/build.mjs chrome --watch",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@prahari/kavach": "workspace:*",
+    "@prahari/ssg": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@types/webextension-polyfill": "^0.12.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.5"
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prahari.dev/schema/action-plan-v1.json",
+  "title": "ActionPlan",
+  "type": "object",
+  "required": ["plan_id", "trace_id", "actions", "done"],
+  "additionalProperties": false,
+  "properties": {
+    "plan_id": { "type": "string", "maxLength": 32 },
+    "trace_id": { "type": "string", "pattern": "^t_[0-9]{1,6}$" },
+    "reasoning": { "type": "string", "maxLength": 800 },
+    "actions": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/Action" } },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "page_change": { "type": "boolean" },
+        "assert_role": { "type": "string", "maxLength": 32 },
+        "assert_text_absent": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "next_tier_hint": { "enum": [0, 1, 2] },
+    "need_visual": { "type": "boolean" },
+    "done": { "type": "boolean" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+
+  "$defs": {
+    "Risk": { "enum": ["safe", "medium", "high"] },
+    "Target": {
+      "oneOf": [
+        { "type": "string", "pattern": "^e[0-9]{1,4}$" },
+        {
+          "type": "object",
+          "required": ["point"],
+          "additionalProperties": false,
+          "properties": {
+            "point": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number" } }
+          }
+        }
+      ]
+    },
+    "Action": {
+      "type": "object",
+      "required": ["op"],
+      "oneOf": [
+        {
+          "required": ["op", "target"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "click" },
+            "target": { "$ref": "#/$defs/Target" },
+            "risk": { "$ref": "#/$defs/Risk" },
+            "reason": { "type": "string", "maxLength": 200 }
+          }
+        },
+        {
+          "required": ["op", "target"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "type" },
+            "target": { "$ref": "#/$defs/Target" },
+            "value": { "type": "string", "maxLength": 256 },
+            "value_ref": { "type": "string", "pattern": "^\u27e6[A-Z][A-Z0-9_]*_[0-9]+\u27e7$" },
+            "clear_first": { "type": "boolean" },
+            "risk": { "$ref": "#/$defs/Risk" }
+          }
+        },
+        {
+          "required": ["op", "target", "option"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "select" },
+            "target": { "$ref": "#/$defs/Target" },
+            "option": { "type": "string", "maxLength": 128 },
+            "risk": { "$ref": "#/$defs/Risk" }
+          }
+        },
+        {
+          "required": ["op", "direction"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "scroll" },
+            "direction": { "enum": ["up", "down", "left", "right", "to_element"] },
+            "amount": { "type": "integer" },
+            "target": { "$ref": "#/$defs/Target" },
+            "risk": { "$ref": "#/$defs/Risk" }
+          }
+        },
+        {
+          "required": ["op", "combo"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "key" },
+            "combo": { "type": "string", "maxLength": 32 },
+            "risk": { "$ref": "#/$defs/Risk" }
+          }
+        },
+        {
+          "required": ["op", "url"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "navigate" },
+            "url": { "type": "string", "maxLength": 2048 },
+            "risk": { "const": "high" }
+          }
+        },
+        {
+          "required": ["op"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "wait" },
+            "ms": { "type": "integer", "minimum": 0, "maximum": 5000 }
+          }
+        },
+        {
+          "required": ["op", "targets"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "extract" },
+            "targets": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/Target" } },
+            "fields": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 64 } }
+          }
+        },
+        {
+          "required": ["op", "question"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "ask_user" },
+            "question": { "type": "string", "maxLength": 300 },
+            "options": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 64 } }
+          }
+        },
+        {
+          "required": ["op"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "done" },
+            "summary": { "type": "string", "maxLength": 800 }
+          }
+        },
+        {
+          "required": ["op"], "additionalProperties": false,
+          "properties": {
+            "op": { "const": "fail" },
+            "reason": { "type": "string", "maxLength": 300 }
+          }
+        }
+      ]
+    }
+  }
+}

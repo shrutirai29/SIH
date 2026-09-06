@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prahari.dev/schema/ssg-v1.json",
+  "title": "SanitizedScreenGraph",
+  "type": "object",
+  "required": [
+    "ssg_version", "session_id", "trace_id", "step", "tier",
+    "purpose", "goal", "viewport", "page", "elements", "redaction_manifest"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ssg_version": { "const": "1.0" },
+    "session_id": { "type": "string", "pattern": "^eph_[0-9a-f]{8,32}$" },
+    "trace_id": { "type": "string", "pattern": "^t_[0-9]{1,6}$" },
+    "step": { "type": "integer", "minimum": 0, "maximum": 200 },
+    "tier": { "enum": [0, 1, 2] },
+    "purpose": { "type": "string", "maxLength": 64 },
+    "goal": { "$ref": "#/$defs/SafeText" },
+    "viewport": { "$ref": "#/$defs/Viewport" },
+    "page": { "$ref": "#/$defs/Page" },
+    "elements": { "type": "array", "maxItems": 400, "items": { "$ref": "#/$defs/Element" } },
+    "text_blocks": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/TextBlock" } },
+    "visual_regions": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/VisualRegion" } },
+    "history": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/HistoryItem" } },
+    "redaction_manifest": { "$ref": "https://prahari.dev/schema/redaction-manifest-v1.json" },
+    "attachment": { "$ref": "#/$defs/Attachment" }
+  },
+
+  "$defs": {
+    "SafeText": {
+      "description": "Text that has passed redaction. May contain U+27E6 CLASS_N U+27E7 tokens.",
+      "type": "string",
+      "maxLength": 2048
+    },
+    "Bbox": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": { "type": "number" }
+    },
+    "Viewport": {
+      "type": "object",
+      "required": ["w", "h", "dpr", "scroll_y"],
+      "additionalProperties": false,
+      "properties": {
+        "w": { "type": "integer", "minimum": 0 },
+        "h": { "type": "integer", "minimum": 0 },
+        "dpr": { "type": "number", "minimum": 0 },
+        "scroll_y": { "type": "integer" },
+        "doc_h": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Page": {
+      "type": "object",
+      "required": ["origin_class", "page_type", "sensitivity"],
+      "additionalProperties": false,
+      "properties": {
+        "origin_class": { "type": "string", "maxLength": 64 },
+        "path_shape": { "type": "string", "maxLength": 128 },
+        "title": { "$ref": "#/$defs/SafeText" },
+        "lang": { "type": "string", "maxLength": 12 },
+        "page_type": {
+          "enum": ["form", "article", "list", "canvas_app", "media", "pdf", "chat", "dashboard", "unknown"]
+        },
+        "sensitivity": { "enum": ["public", "semi_private", "private", "credential"] }
+      }
+    },
+    "Redaction": {
+      "type": "object",
+      "required": ["applied"],
+      "additionalProperties": false,
+      "properties": {
+        "applied": { "type": "boolean" },
+        "class": { "type": "string", "maxLength": 32 },
+        "method": { "enum": ["placeholder", "blackout", "blur", "pixelate", "drop"] }
+      }
+    },
+    "Element": {
+      "type": "object",
+      "required": ["id", "role", "bbox", "actionable"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^e[0-9]{1,4}$" },
+        "role": { "type": "string", "maxLength": 32 },
+        "tag": { "type": "string", "maxLength": 16 },
+        "input_type": { "type": "string", "maxLength": 24 },
+        "bbox": { "$ref": "#/$defs/Bbox" },
+        "z": { "type": "integer" },
+        "visible": { "type": "boolean" },
+        "name": { "$ref": "#/$defs/SafeText" },
+        "value": { "$ref": "#/$defs/SafeText" },
+        "placeholder": { "$ref": "#/$defs/SafeText" },
+        "state": { "type": "object", "additionalProperties": { "type": "boolean" } },
+        "redaction": { "$ref": "#/$defs/Redaction" },
+        "actionable": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "enum": ["click", "type", "select", "clear", "hover", "focus", "scroll"] }
+        },
+        "client_risk": { "enum": ["safe", "medium", "high"] },
+        "risk_reason": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "TextBlock": {
+      "type": "object",
+      "required": ["id", "bbox", "source", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^t[0-9]{1,4}$" },
+        "bbox": { "$ref": "#/$defs/Bbox" },
+        "source": { "enum": ["dom", "ocr"] },
+        "text": { "$ref": "#/$defs/SafeText" },
+        "ocr_conf": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "VisualRegion": {
+      "type": "object",
+      "required": ["id", "bbox", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^v[0-9]{1,4}$" },
+        "bbox": { "$ref": "#/$defs/Bbox" },
+        "kind": { "enum": ["img", "video", "canvas", "iframe", "svg", "unknown"] },
+        "caption": { "$ref": "#/$defs/SafeText" },
+        "redaction": { "$ref": "#/$defs/Redaction" }
+      }
+    },
+    "HistoryItem": {
+      "type": "object",
+      "required": ["step", "action", "outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "step": { "type": "integer", "minimum": 0 },
+        "action": { "type": "string", "maxLength": 32 },
+        "target": { "type": "string", "maxLength": 16 },
+        "outcome": { "enum": ["advanced", "no_change", "error", "blocked"] }
+      }
+    },
+    "Attachment": {
+      "type": "object",
+      "required": ["screenshot"],
+      "additionalProperties": false,
+      "properties": {
+        "screenshot": {
+          "type": "object",
+          "required": ["format", "w", "h", "sha256", "redacted"],
+          "additionalProperties": false,
+          "properties": {
+            "format": { "const": "jpeg" },
+            "w": { "type": "integer" },
+            "h": { "type": "integer" },
+            "q": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "redacted": { "const": true }
+          }
+        }
+      }
+    }
+  }
+}

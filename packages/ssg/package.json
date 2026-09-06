@@ -1,0 +1,20 @@
+{
+  "name": "@prahari/ssg",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./validators": "./src/generated/index.ts",
+    "./schema/*": "./schema/*"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "gen:contract": "node scripts/compile-schemas.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1"
+  }
+}

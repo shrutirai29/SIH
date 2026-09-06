@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prahari.dev/schema/redaction-manifest-v1.json",
+  "title": "RedactionManifest",
+  "type": "object",
+  "required": ["policy_id", "counts", "methods", "detectors", "coverage_confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "policy_id": { "type": "string", "maxLength": 64 },
+    "counts": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]{0,31}$" },
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "methods": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "placeholder": { "type": "integer", "minimum": 0 },
+        "blackout": { "type": "integer", "minimum": 0 },
+        "blur": { "type": "integer", "minimum": 0 },
+        "pixelate": { "type": "integer", "minimum": 0 },
+        "drop": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "detectors": {
+      "type": "array",
+      "maxItems": 24,
+      "items": { "type": "string", "maxLength": 64 }
+    },
+    "coverage_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "unexplained_pixel_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "marker_convention": { "type": "string", "maxLength": 128 }
+  }
+}
