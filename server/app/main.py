@@ -28,6 +28,7 @@ from pydantic import ValidationError
 
 from app.agents.grounder import build_user_prompt, make_validator, system_prompt
 from app.guards.ingress_pii import contains_pii, first_class
+from app.guards.image_sanity import check_image_sanity
 from app.llm.client import LlmClient, LlmError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.ssg import SanitizedScreenGraph
@@ -109,6 +110,23 @@ async def metrics() -> dict[str, Any]:
         **_stats,
         "schema_validity_first_try": round(_stats["schema_first_try"] / total, 4),
     }
+
+
+@app.post("/v1/image/verify")
+async def verify_image(request: Request) -> Response:
+    """Validates an uploaded screenshot PNG is structurally sound.
+
+    Accepts raw PNG bytes in the request body. Returns 200 if valid, 422 if not.
+    This is the server-side half of the image safety pipeline (ticket F5).
+    """
+    body = await request.body()
+    result = check_image_sanity(body)
+    if result.ok:
+        return JSONResponse({"ok": True})
+    return JSONResponse(
+        {"error": "IMAGE_INVALID", "detail": result.detail},
+        status_code=422,
+    )
 
 
 @app.post("/v1/agent/step")

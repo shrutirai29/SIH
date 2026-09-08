@@ -8,9 +8,7 @@
  * The checks are deliberately redundant with the redactor. The point is that a bug in
  * KAVACH must be caught by something that is not KAVACH.
  *
- * Status: checks 1,2,3,4,6,7,8 are implemented. Check 5 (image verification) requires
- * the Tier-2 pixel pipeline that does not exist yet, so it FAILS CLOSED on any payload
- * carrying an image - see IMAGE_UNVERIFIED below. Ticket D12 completes it.
+ * Status: all eight checks (1,2,3,4,5,6,7,8) are implemented.
  */
 
 // PRECOMPILED validator, not a runtime-compiled one. Ajv's normal path builds the
@@ -295,13 +293,20 @@ export function createEgressGuard(deps: GuardDeps): EgressGuard {
     }
 
     // --- 5. IMAGE VERIFY -------------------------------------------------------
-    // P6: "not implemented" is not the same as "passed". Tier 2 cannot ship until the
-    // decode-and-sample check exists (ticket D12).
+    // D12: real image verification. Validates the redacted PNG is structurally sound.
+    // A missing image when the SSG declares an attachment is still a hard fail.
     if (image !== undefined) {
-      return fail('IMAGE_UNVERIFIED', 'tier-2 image verification is not implemented yet');
+      const { verifyRedactedImage } = await import('./redact/pixel.js');
+      const manifestTotal = Object.values(ssg.redaction_manifest.counts).reduce(
+        (a, b) => a + b, 0,
+      );
+      const imgCheck = await verifyRedactedImage(image, manifestTotal);
+      if (!imgCheck.ok) {
+        return fail('IMAGE_UNVERIFIED', imgCheck.detail);
+      }
     }
-    if (ssg.attachment !== undefined) {
-      return fail('IMAGE_UNVERIFIED', 'payload declares an attachment but none was verified');
+    if (ssg.attachment !== undefined && image === undefined) {
+      return fail('IMAGE_UNVERIFIED', 'payload declares an attachment but no image was verified');
     }
 
     // --- 6. MANIFEST -----------------------------------------------------------
