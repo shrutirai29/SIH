@@ -1,19 +1,3 @@
-/**
- * HASTA - the action executor.
- *
- * Resolves an SSG element id back to a live element, re-derives risk from that live
- * element, gates on risk, and dispatches.
- *
- * Two rules that survive every later refactor:
- *   1. The server's `risk` may only RAISE the client's assessment, never lower it
- *      (RULES.md S2). The server is the party we chose not to trust.
- *   2. `high` risk always stops for a human. There is no auto-approve, no allowlist,
- *      no remembered consent (RULES.md S3).
- *
- * Detokenisation (E4) is implemented: `value_ref` resolves through the vault, subject
- * to sink binding. Trusted CDP events (E6) and character-wise typing (E7) are later.
- */
-
 import type { Action, Risk, Target } from '@prahari/ssg';
 import { isToken } from '@prahari/ssg';
 import { containsPii } from '@prahari/kavach/detectors';
@@ -104,6 +88,58 @@ function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
   el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
+function extractElementData(
+  el: Element,
+  fields?: string[]
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  const requestedFields =
+    fields && fields.length > 0
+      ? fields
+      : ['text'];
+
+  for (const field of requestedFields) {
+    switch (field) {
+      case 'text':
+        result.text = (el.textContent ?? '').trim();
+        break;
+
+      case 'value':
+        if (
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLTextAreaElement ||
+          el instanceof HTMLSelectElement
+        ) {
+          result.value = el.value;
+        }
+        break;
+
+      case 'html':
+        result.html = el.innerHTML;
+        break;
+
+      case 'aria-label':
+        result['aria-label'] = el.getAttribute('aria-label');
+        break;
+
+      case 'placeholder':
+        if (
+          el instanceof HTMLInputElement ||
+          el instanceof HTMLTextAreaElement
+        ) {
+          result.placeholder = el.placeholder;
+        }
+        break;
+
+      default:
+        result[field] = el.getAttribute(field);
+    }
+  }
+
+  return result;
+}
+
 export async function execute(action: Action): Promise<ActionResult> {
   const target = 'target' in action ? action.target : undefined;
   const el = resolve(target);
@@ -126,18 +162,63 @@ export async function execute(action: Action): Promise<ActionResult> {
   try {
     switch (action.op) {
       case 'scroll': {
-        if (action.direction === 'to_element' && el !== null) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          return { outcome: 'advanced' };
-        }
-        const amount = action.amount ?? 400;
-        const before = window.scrollY;
-        const dx = action.direction === 'left' ? -amount : action.direction === 'right' ? amount : 0;
-        const dy = action.direction === 'up' ? -amount : action.direction === 'down' ? amount : 0;
-        window.scrollBy({ top: dy, left: dx, behavior: 'smooth' });
-        await settle(250);
-        return { outcome: window.scrollY === before ? 'no_change' : 'advanced' };
-      }
+  if (action.direction === 'to_element' && el !== null) {
+    el.scrollIntoView({
+      behavior: 'auto',
+      block: 'center',
+    });
+
+    await settle(400);
+
+    return { outcome: 'advanced' };
+  }
+
+  const before = window.scrollY;
+
+  // Default: move almost one full screen at a time
+  const amount = action.amount ?? Math.floor(window.innerHeight * 0.8);
+
+  const dx =
+    action.direction === 'left'
+      ? -amount
+      : action.direction === 'right'
+        ? amount
+        : 0;
+
+  const dy =
+    action.direction === 'up'
+      ? -amount
+      : action.direction === 'down'
+        ? amount
+        : 0;
+
+  // IMPORTANT: no smooth scrolling for an agent
+  window.scrollBy({
+    top: dy,
+    left: dx,
+    behavior: 'auto',
+  });
+
+  // Let the page layout settle before the next observation
+  await settle(500);
+
+  const after = window.scrollY;
+
+  console.log(
+    'PRAHARI SCROLL:',
+    'before=', before,
+    'after=', after,
+    'requested=', dy,
+    'max=',
+    document.documentElement.scrollHeight - window.innerHeight,
+  );
+
+  return {
+    outcome: Math.abs(after - before) > 5
+      ? 'advanced'
+      : 'no_change',
+  };
+}
 
       case 'click': {
         if (el === null) return { outcome: 'error', detail: 'no target' };
@@ -245,11 +326,56 @@ export async function execute(action: Action): Promise<ActionResult> {
         // the confirm modal and origin policy from Phase 4 first.
         return { outcome: 'blocked', detail: 'navigate is disabled until the risk modal ships' };
 
-      case 'extract':
-      case 'ask_user':
-      case 'done':
-      case 'fail':
-        return { outcome: 'advanced' };
+case 'extract': {
+  const extracted: Record<string, unknown> = {};
+
+  for (const target of action.targets) {
+    const element = resolve(target);
+
+    if (element === null) {
+      extracted[String(target)] = {
+        error: 'target no longer on page',
+      };
+      continue;
+    }
+
+    extracted[String(target)] = extractElementData(
+      element,
+      action.fields
+    );
+  }
+
+  return {
+    outcome: 'advanced',
+    detail: 'extracted requested page data',
+    data: extracted,
+  };
+}
+
+case 'ask_user': {
+  const result: ActionResult = {
+    outcome: 'advanced',
+    question: action.question,
+  };
+
+  if (action.options !== undefined) {
+    result.options = action.options;
+  }
+
+  return result;
+}
+
+case 'done':
+  return {
+    outcome: 'advanced',
+    detail: action.summary ?? 'Task complete',
+  };
+
+case 'fail':
+  return {
+    outcome: 'error',
+    detail: action.reason ?? 'Agent reported task failure',
+  };
 
       default: {
         const _never: never = action;
