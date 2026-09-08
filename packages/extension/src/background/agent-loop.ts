@@ -214,7 +214,18 @@ export class AgentLoop {
       if (signal.aborted) return;
 
       if (plan.done || plan.actions.some((a) => a.op === 'done')) {
-        this.#patch({ phase: 'done', message: 'Task complete.' });
+        const doneAction = plan.actions.find((a) => a.op === 'done');
+
+        this.#patch({
+          phase: 'done',
+          message:
+            doneAction &&
+            doneAction.op === 'done' &&
+            doneAction.summary
+              ? doneAction.summary
+              : 'Task complete.',
+        });
+
         return;
       }
       if (outcome === 'error') {
