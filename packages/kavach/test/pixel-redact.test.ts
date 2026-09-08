@@ -101,7 +101,7 @@ describe('verifyRedactedImage', () => {
 describe('pixel redaction types', () => {
   it('PixelRedactMode accepts valid modes', async () => {
     // Type-level test: if this compiles, the types are correct.
-    const { type } = await import('../src/redact/pixel.js');
+    await import('../src/redact/pixel.js');
     const modes: import('../src/redact/pixel.js').PixelRedactMode[] = [
       'BLACKOUT', 'BLUR', 'PIXELATE',
     ];

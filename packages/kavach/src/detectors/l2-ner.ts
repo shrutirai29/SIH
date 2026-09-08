@@ -149,7 +149,7 @@ export function spansToDetections(spans: readonly NerSpan[]): Detection[] {
 export function createStubDetector(reason = 'NER endpoint not configured'): L2NerDetector {
   let warned = false;
 
-  const detector: L2NerDetector = async function stubDetector(_text: string): Promise<NerResult> {
+  const detector = async function stubDetector(_text: string): Promise<NerResult> {
     if (!warned) {
       console.warn('[kavach/l2-ner] DEGRADED: ' + reason);
       warned = true;
@@ -163,7 +163,7 @@ export function createStubDetector(reason = 'NER endpoint not configured'): L2Ne
   };
 
   Object.defineProperty(detector, 'available', { value: false, writable: false });
-  return detector;
+  return detector as unknown as L2NerDetector;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ export function createHttpDetector(config: NerEndpointConfig): L2NerDetector {
 
   let isAvailable = true;
 
-  const detector: L2NerDetector = async function httpDetector(text: string): Promise<NerResult> {
+  const detector = async function httpDetector(text: string): Promise<NerResult> {
     const started = performance.now();
 
     try {
@@ -249,7 +249,7 @@ export function createHttpDetector(config: NerEndpointConfig): L2NerDetector {
     get: () => isAvailable,
   });
 
-  return detector;
+  return detector as unknown as L2NerDetector;
 
   function degraded(started: number, reason: string): NerResult {
     console.warn('[kavach/l2-ner] DEGRADED: ' + reason);
