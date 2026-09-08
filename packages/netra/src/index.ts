@@ -155,3 +155,6 @@ export function chooseTier(s: ApcSignals): TierDecision {
     why,
   };
 }
+
+export { NetraInferenceHost } from './host/netra-host.js';
+export { MediaPipeFaceDetector } from './mediapipe/face-detector.js';
