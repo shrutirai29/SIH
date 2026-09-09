@@ -96,39 +96,42 @@ export class AgentLoop {
     this.#patch({ phase: 'idle', message: reason });
   }
 
-  async start(goal: string): Promise<AgentState> {
-    if (this.#abort !== null) this.stop('Restarting.');
+async start(goal: string): Promise<AgentState> {
+  if (this.#abort !== null) this.stop('Restarting.');
 
-    const controller = new AbortController();
-    this.#abort = controller;
-    const sessionId = newSessionId();
+  // Start a fresh session. Remove temporary payload data
+  // from the previous session.
+  this.transmissions.clear();
 
-    this.#patch({
-      ...freshState(),
-      phase: 'observing',
-      goal,
-      message: 'Starting.',
-    });
+  const controller = new AbortController();
+  this.#abort = controller;
+  const sessionId = newSessionId();
 
-    // Prove the inference boundary is alive before the first step. In the skeleton it
-    // only pings; from Phase 2 it is where the models live.
-    try {
-      const pong = await this.#host.ping();
-      this.#patch({ inferenceHost: pong.host });
-    } catch (err) {
-      this.#patch({ inferenceHost: 'unavailable: ' + errName(err) });
-    }
+  this.#patch({
+    ...freshState(),
+    phase: 'observing',
+    goal,
+    message: 'Starting.',
+  });
 
-    void this.#run(goal, sessionId, controller.signal);
-    return this.#state;
+  // Prove the inference boundary is alive before the first step. In the skeleton it
+  // only pings; from Phase 2 it is where the models live.
+  try {
+    const pong = await this.#host.ping();
+    this.#patch({ inferenceHost: pong.host });
+  } catch (err) {
+    this.#patch({ inferenceHost: 'unavailable: ' + errName(err) });
   }
+
+  void this.#run(goal, sessionId, controller.signal);
+  return this.#state;
+}
 
   async #run(goal: string, sessionId: string, signal: AbortSignal): Promise<void> {
     for (let step = 0; step < CONFIG.maxSteps; step++) {
       if (signal.aborted) return;
 
       const traceId = 't_' + String(step);
-
       // ---- observe + sanitize (both happen inside the tab) ----------------------
       this.#patch({ phase: 'observing', step, message: 'Reading the screen…' });
       let extract: ExtractResult;

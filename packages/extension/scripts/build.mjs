@@ -38,7 +38,7 @@ if (target !== 'chrome' && target !== 'firefox') {
 }
 
 const outDir = resolve(root, 'dist-' + target);
-const serverOrigin = process.env.PRAHARI_SERVER_ORIGIN ?? 'http://localhost:8081';
+const serverOrigin = process.env.PRAHARI_SERVER_ORIGIN ?? 'http://localhost:8080';
 const isDev = process.env.NODE_ENV !== 'production';
 
 /** Shared define so `import.meta.env` resolves identically in both passes. */
