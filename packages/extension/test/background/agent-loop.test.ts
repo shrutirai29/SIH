@@ -29,12 +29,12 @@ vi.hoisted(() => {
   };
 });
 
-import type { ActionPlan, RedactedText, SSG } from '@prahari/ssg';
+import type { Action, ActionPlan, RedactedText, SSG } from '@prahari/ssg';
 import { type EgressGuard, type GuardVerdict, sha256Hex } from '@prahari/kavach';
 import { browser } from '../../src/platform/index.js';
 import * as platform from '../../src/platform/index.js';
 import { AgentLoop } from '../../src/background/agent-loop.js';
-import type { ExtractResult } from '../../src/shared/messages.js';
+import type { ActionResult, ExtractResult } from '../../src/shared/messages.js';
 import { CONFIG } from '../../src/shared/config.js';
 
 const r = (s: string): RedactedText => s as RedactedText;
