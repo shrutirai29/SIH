@@ -134,10 +134,21 @@ export class AgentLoop {
       let extract: ExtractResult;
       try {
         extract = await this.#extract(goal, step, traceId, sessionId);
-      } catch (err) {
-        this.#patch({ phase: 'error', message: 'Could not read the page: ' + errName(err) });
-        return;
-      }
+} catch (err) {
+  console.error('PRAHARI extraction failed:', err);
+
+  const details =
+    err instanceof Error
+      ? `${err.name}: ${err.message}`
+      : String(err);
+
+  this.#patch({
+    phase: 'error',
+    message: 'Could not read the page: ' + details,
+  });
+
+  return;
+}
       if (signal.aborted) return;
 
       const redactions = Object.values(extract.redactions).reduce((a, b) => a + b, 0);
