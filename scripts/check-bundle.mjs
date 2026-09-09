@@ -14,7 +14,7 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, basename,sep } from 'node:path';
+import { resolve, basename } from 'node:path';
 
 const DEFAULT_DIRS = [
   'packages/extension/dist-chrome',
