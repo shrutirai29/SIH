@@ -146,12 +146,13 @@
           "required": ["format", "w", "h", "sha256", "redacted"],
           "additionalProperties": false,
           "properties": {
-            "format": { "const": "jpeg" },
+            "format": { "enum": ["jpeg", "png"] },
             "w": { "type": "integer" },
             "h": { "type": "integer" },
             "q": { "type": "integer", "minimum": 1, "maximum": 100 },
             "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "redacted": { "const": true }
+            "redacted": { "const": true },
+            "data": { "type": "string" }
           }
         }
       }

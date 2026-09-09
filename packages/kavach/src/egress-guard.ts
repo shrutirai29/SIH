@@ -285,6 +285,7 @@ export function createEgressGuard(deps: GuardDeps): EgressGuard {
 
     // --- 4. ENTROPY ------------------------------------------------------------
     for (const { path, value } of walkStrings(ssg)) {
+      if (path.startsWith('$.attachment')) continue;
       if (value.length < ENTROPY_MIN_LEN) continue;
       if (!BLOBBY_RE.test(value)) continue;
       if (shannonEntropy(value) > ENTROPY_THRESHOLD) {
@@ -303,6 +304,13 @@ export function createEgressGuard(deps: GuardDeps): EgressGuard {
       const imgCheck = await verifyRedactedImage(image, manifestTotal);
       if (!imgCheck.ok) {
         return fail('IMAGE_UNVERIFIED', imgCheck.detail);
+      }
+      if (ssg.attachment?.screenshot?.sha256) {
+        const imgBytes = new Uint8Array(await image.arrayBuffer());
+        const computedSha = await sha256Hex(imgBytes);
+        if (computedSha !== ssg.attachment.screenshot.sha256) {
+          return fail('IMAGE_UNVERIFIED', 'attachment sha256 does not match verified image bytes');
+        }
       }
     }
     if (ssg.attachment !== undefined && image === undefined) {

@@ -102,12 +102,13 @@ export interface RedactionManifest {
 
 export interface Attachment {
   screenshot: {
-    format: 'jpeg';
+    format: 'jpeg' | 'png';
     w: number;
     h: number;
     q?: number;
     sha256: string;
     redacted: true;
+    data?: string;
   };
 }
 

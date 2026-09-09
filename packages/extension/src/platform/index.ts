@@ -135,4 +135,27 @@ export async function openPanel(tabId: number | undefined): Promise<void> {
   }
 }
 
+import {
+  captureActiveTab as _captureActiveTab,
+  type CaptureOptions,
+  type CapturedTab,
+  extractPngDimensions,
+  extractJpegDimensions,
+  parseDataUrl,
+  bytesToBase64,
+} from './capture.js';
+
+export async function captureActiveTab(options: CaptureOptions = {}): Promise<CapturedTab | null> {
+  return _captureActiveTab(options, browser);
+}
+
+export {
+  extractPngDimensions,
+  extractJpegDimensions,
+  parseDataUrl,
+  bytesToBase64,
+  type CaptureOptions,
+  type CapturedTab,
+};
+export * from './visual-redactor.js';
 export { browser };
