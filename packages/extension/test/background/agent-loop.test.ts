@@ -1312,4 +1312,136 @@ describe('AgentLoop — HASTA Controller, Bounded Recovery, and Multi-Action Saf
     // e_fresh_target from plan 1 was executed
     expect(executedActions.some((a) => 'target' in a && a.target === 'e_fresh_target')).toBe(true);
   });
+
+  // 21. Realistic multi-step form-fill scenario
+  it('21. realistic multi-step form-fill: type succeeds -> click continue executes -> next observation occurs -> done', async () => {
+    const guardInvocations: SSG[] = [];
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'type', target: 'e_fullname', value: 'Asha Patil' },
+          { op: 'click', target: 'e_continue' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [
+          { op: 'type', target: 'e_mobile', value: '9876543210' },
+          { op: 'done', summary: 'Form filled successfully' },
+        ],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans, { guardInvocations });
+    actionResults.set('e_fullname', { outcome: 'advanced' });
+    actionResults.set('e_continue', { outcome: 'advanced' });
+    actionResults.set('e_mobile', { outcome: 'advanced' });
+
+    await loop.start('Fill Kisan portal application form');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Both actions in step 0 were executed in order
+    expect(executedActions[0]!.op).toBe('type');
+    expect((executedActions[0] as { target: string }).target).toBe('e_fullname');
+    expect(executedActions[1]!.op).toBe('click');
+    expect((executedActions[1] as { target: string }).target).toBe('e_continue');
+
+    // Observation for step 1 occurred
+    expect(guardInvocations.length).toBeGreaterThanOrEqual(2);
+
+    // Step 1 action executed
+    expect(executedActions[2]!.op).toBe('type');
+    expect((executedActions[2] as { target: string }).target).toBe('e_mobile');
+
+    expect(loop.state.message).toBe('Form filled successfully');
+    expect(loop.state.phase).toBe('done');
+  });
+
+  // 22. Multi-action plan with no_change on first action
+  it('22. multi-action plan: first action returns no_change -> sibling action aborted -> fresh observation occurs', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'scroll', direction: 'down' },
+          { op: 'click', target: 'e_should_not_run_on_no_change' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [
+          { op: 'click', target: 'e_alternative_button' },
+          { op: 'done', summary: 'Recovered and done' },
+        ],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('scroll', { outcome: 'no_change', detail: 'already at bottom' });
+    actionResults.set('e_alternative_button', { outcome: 'advanced' });
+
+    await loop.start('Scroll and click test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Sibling action was NOT executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_should_not_run_on_no_change')).toBe(false);
+
+    // Replanned action from step 1 WAS executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_alternative_button')).toBe(true);
+    expect(loop.state.phase).toBe('done');
+  });
+
+  // 23. Multi-action plan with blocked on first action
+  it('23. multi-action plan: first action returns blocked -> sibling action aborted -> terminal blocked immediately', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'type', target: 'e_unauthorized_sink', value_ref: '⟦TOKEN_AADHAAR_0⟧' },
+          { op: 'click', target: 'e_should_never_run_after_blocked' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [{ op: 'click', target: 'e_never_replan_after_blocked' }],
+        done: false,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_unauthorized_sink', {
+      outcome: 'blocked',
+      detail: 'SECURITY BLOCK: token sink binding violation',
+    });
+
+    await loop.start('Security block test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('blocked');
+    }, { timeout: 3000 });
+
+    // Sibling action was NOT executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_should_never_run_after_blocked')).toBe(false);
+
+    // No retry or replan occurred (executedActions has only the 1 blocked attempt)
+    expect(executedActions.length).toBe(1);
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_never_replan_after_blocked')).toBe(false);
+    expect(loop.state.phase).toBe('blocked');
+    expect(loop.state.message).toContain('token sink binding violation');
+  });
 });
