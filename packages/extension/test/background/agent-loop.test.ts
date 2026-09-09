@@ -1223,6 +1223,12 @@ describe('AgentLoop — HASTA Controller, Bounded Recovery, and Multi-Action Saf
         ],
         done: false,
       },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [{ op: 'click', target: 'e_never_reach' }],
+        done: false,
+      },
     ];
     const loop = setupLoop(plans);
     await loop.start('Ask user test');
@@ -1231,9 +1237,17 @@ describe('AgentLoop — HASTA Controller, Bounded Recovery, and Multi-Action Saf
       expect(loop.state.phase).toBe('blocked');
     }, { timeout: 3000 });
 
+    // 1. Correct phase and human-readable prompt
+    expect(loop.state.phase).toBe('blocked');
     expect(loop.state.message).toContain('Awaiting user response: Please select your state');
-    // e_subsequent was NEVER executed!
+
+    // 2. Sibling actions within the same plan were dropped and never executed
     expect(executedActions.some((a) => 'target' in a && a.target === 'e_subsequent')).toBe(false);
+    expect(executedActions.length).toBe(0);
+
+    // 3. No automatic retry or plan advance occurred (step remains 0)
+    expect(loop.state.step).toBe(0);
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_never_reach')).toBe(false);
   });
 
   // 16, 17, 18. History ring buffer, bounding, and privacy

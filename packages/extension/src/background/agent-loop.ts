@@ -405,7 +405,15 @@ async start(goal: string): Promise<AgentState> {
           outcome: 'no_change',
         });
         if (history.length > 20) history.shift();
-        // Pause execution: transition to blocked phase (waiting for user), stop further action dispatch
+
+        // TODO/DEFERRED(ask_user-resume):
+        // Legitimate human interaction required. The existing AgentPhase contract
+        // ('idle'|'observing'|'sanitizing'|'sending'|'thinking'|'acting'|'done'|'blocked'|'error')
+        // does not define a dedicated 'waiting_for_user' phase, nor does messages.ts define a
+        // 'RESUME_TASK' / 'USER_RESPONSE' request. To safely pause without modifying SSG or
+        // inventing a premature messaging protocol, ask_user is paused via the terminal 'blocked'
+        // phase with a user-facing prompt ("Awaiting user response: ..."), ensuring zero browser
+        // actions are dispatched and no automatic retry occurs until interactive resume is added.
         this.#patch({
           phase: 'blocked',
           message: 'Awaiting user response: ' + action.question,
