@@ -8,7 +8,7 @@
  * wrong, and sending it again would only be wrong again.
  */
 
-import type { Action, ActionPlan, RedactedText, SSG } from '@prahari/ssg';
+import type { Action, ActionPlan, HistoryItem, RedactedText, SSG } from '@prahari/ssg';
 import {
   Ledger,
   MemoryLedgerStore,
@@ -22,7 +22,16 @@ import type {
   CanaryAuditResult,
   ExtractResult,
 } from '../shared/messages.js';
-import { browser, createInferenceHost, type InferenceHost } from '../platform/index.js';
+import {
+  browser,
+  bytesToBase64,
+  captureActiveTab,
+  createInferenceHost,
+  redactCapturedTab,
+  type CapturedTab,
+  type InferenceHost,
+  type RedactedScreenshot,
+} from '../platform/index.js';
 import { ExtensionLedgerStore } from './ledger-store.js';
 import { TransmissionBuffer } from './transmissions.js';
 import { postStep } from './net.js';
@@ -51,6 +60,12 @@ function newSessionId(): string {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+export interface AgentLoopDeps {
+  readonly guard?: EgressGuard;
+  readonly host?: InferenceHost;
+  readonly store?: ExtensionLedgerStore;
+}
+
 export class AgentLoop {
   #state: AgentState = freshState();
   #abort: AbortController | null = null;
@@ -59,18 +74,21 @@ export class AgentLoop {
   readonly ledger: Ledger;
   /** Exact bytes of recent steps, memory only, for the diff viewer (ticket D16). */
   readonly transmissions = new TransmissionBuffer();
-  readonly #store = new ExtensionLedgerStore();
+  readonly #store: ExtensionLedgerStore;
   readonly #guard: EgressGuard;
   readonly #host: InferenceHost;
 
-  constructor() {
+  constructor(deps: AgentLoopDeps = {}) {
+    this.#store = deps.store ?? new ExtensionLedgerStore();
     this.ledger = new Ledger(this.#store);
-    this.#host = createInferenceHost();
-    this.#guard = createEgressGuard({
-      serverOrigin: CONFIG.serverOrigin,
-      ledger: this.ledger,
-      allowInsecureLocalhost: CONFIG.allowInsecureLocalhost,
-    });
+    this.#host = deps.host ?? createInferenceHost();
+    this.#guard =
+      deps.guard ??
+      createEgressGuard({
+        serverOrigin: CONFIG.serverOrigin,
+        ledger: this.ledger,
+        allowInsecureLocalhost: CONFIG.allowInsecureLocalhost,
+      });
   }
 
   get state(): AgentState {
@@ -124,6 +142,9 @@ export class AgentLoop {
   }
 
   async #run(goal: string, sessionId: string, signal: AbortSignal): Promise<void> {
+    let needVisual = false;
+    const history: HistoryItem[] = [];
+
     for (let step = 0; step < CONFIG.maxSteps; step++) {
       if (signal.aborted) return;
 
@@ -140,6 +161,71 @@ export class AgentLoop {
       }
       if (signal.aborted) return;
 
+      if (history.length > 0) {
+        extract.ssg.history = [...history];
+      }
+
+      let imageBlob: Blob | undefined = undefined;
+      if (needVisual) {
+        needVisual = false;
+        this.#patch({ tier: 2, message: 'Capturing and redacting visual evidence requested by planner…' });
+
+        let captured: CapturedTab | null = null;
+        try {
+          captured = await captureActiveTab();
+        } catch {
+          captured = null;
+        }
+
+        if (!captured) {
+          this.#patch({
+            phase: 'error',
+            message: 'Visual capture failed when requested by planner. Stopping.',
+          });
+          return;
+        }
+
+        let redacted: RedactedScreenshot | null = null;
+        try {
+          redacted = await redactCapturedTab(captured, extract.ssg, extract.diff);
+        } catch {
+          redacted = null;
+        }
+
+        if (!redacted) {
+          this.#patch({
+            phase: 'error',
+            message: 'Visual redaction failed when requested by planner. Stopping.',
+          });
+          return;
+        }
+
+        try {
+          const arrayBuffer = await redacted.blob.arrayBuffer();
+          const base64Data = bytesToBase64(new Uint8Array(arrayBuffer));
+          extract.ssg.tier = 2;
+          extract.ssg.attachment = {
+            screenshot: {
+              format: 'png',
+              w: redacted.width,
+              h: redacted.height,
+              sha256: redacted.sha256,
+              redacted: true,
+              data: base64Data,
+            },
+          };
+          imageBlob = redacted.blob;
+        } catch {
+          this.#patch({
+            phase: 'error',
+            message: 'Constructing visual attachment failed. Stopping.',
+          });
+          return;
+        }
+      } else {
+        this.#patch({ tier: 1 });
+      }
+
       const redactions = Object.values(extract.redactions).reduce((a, b) => a + b, 0);
       this.#patch({
         phase: 'sanitizing',
@@ -149,7 +235,7 @@ export class AgentLoop {
 
       // ---- guard + send --------------------------------------------------------
       this.#patch({ phase: 'sending', message: 'Checking the payload before it leaves…' });
-      const result = await postStep(this.#guard, extract.ssg);
+      const result = await postStep(this.#guard, extract.ssg, imageBlob);
       if (signal.aborted) return;
 
       if (!result.ok) {
@@ -210,7 +296,8 @@ export class AgentLoop {
 
       // ---- act -----------------------------------------------------------------
       const plan: ActionPlan = result.plan;
-      const outcome = await this.#actAll(plan.actions, signal);
+      needVisual = plan.need_visual === true;
+      const outcome = await this.#actAll(plan.actions, step, history, signal);
       if (signal.aborted) return;
 
       if (plan.done || plan.actions.some((a) => a.op === 'done')) {
@@ -233,15 +320,41 @@ export class AgentLoop {
     this.#patch({ phase: 'done', message: 'Step limit reached.' });
   }
 
-  async #actAll(actions: readonly Action[], signal: AbortSignal): Promise<ActionResult['outcome']> {
+  async #actAll(
+    actions: readonly Action[],
+    step: number,
+    history: HistoryItem[],
+    signal: AbortSignal,
+  ): Promise<ActionResult['outcome']> {
     let last: ActionResult['outcome'] = 'no_change';
     for (const action of actions) {
       if (signal.aborted) return 'blocked';
-      if (action.op === 'done' || action.op === 'fail') return 'advanced';
+      if (action.op === 'done' || action.op === 'fail') {
+        history.push({
+          step,
+          action: action.op,
+          outcome: 'advanced',
+        });
+        if (history.length > 20) history.shift();
+        return 'advanced';
+      }
 
       this.#patch({ phase: 'acting', message: 'Executing: ' + action.op });
       const res = await this.#execute(action);
       last = res.outcome;
+
+      const target =
+        'target' in action && typeof (action as { target?: string }).target === 'string'
+          ? (action as { target: string }).target.slice(0, 16)
+          : undefined;
+
+      history.push({
+        step,
+        action: action.op,
+        ...(target !== undefined ? { target } : {}),
+        outcome: res.outcome,
+      });
+      if (history.length > 20) history.shift();
 
       // A refused action is the system defending itself; the user must see WHY, and
       // a sink-binding refusal is the single most important thing this UI can say.

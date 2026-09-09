@@ -46,9 +46,9 @@ const STEP_TIMEOUT_MS = 20_000;
  * @param guard the KAVACH egress guard; injected so the caller cannot substitute a
  *              permissive stand-in without it being visible at the call site.
  */
-export async function postStep(guard: EgressGuard, ssg: SSG): Promise<StepResult> {
+export async function postStep(guard: EgressGuard, ssg: SSG, image?: Blob): Promise<StepResult> {
   // ---- The choke point. Nothing below this line runs on a failed verdict. --------
-  const verdict = await guard(ssg);
+  const verdict = await guard(ssg, image);
   if (!verdict.ok) {
     return { ok: false, kind: 'blocked', reason: verdict.reason, detail: verdict.detail };
   }
