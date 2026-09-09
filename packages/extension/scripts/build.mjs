@@ -16,7 +16,12 @@
 
 import { build } from 'vite';
 import react from '@vitejs/plugin-react';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import {
+  mkdir,
+  writeFile,
+  readFile,
+  cp,
+} from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildManifest } from '../manifest.base.mjs';
@@ -159,6 +164,25 @@ async function writeManifest() {
   );
 }
 
+/**
+ * Copies all local NETRA inference assets into the extension package.
+ *
+ * Offscreen inference is network-denied, so MediaPipe WASM files and ML
+ * models must be packaged with the extension instead of fetched at runtime.
+ */
+async function copyNetraAssets() {
+  const netraAssets = resolve(root, '../netra/assets');
+
+  await cp(
+    netraAssets,
+    resolve(outDir, 'assets/netra'),
+    {
+      recursive: true,
+      force: true,
+    },
+  );
+}
+
 /** A 128px placeholder icon so the manifest reference resolves. Replaced in Phase 7. */
 async function writeIcon() {
   // 1x1 transparent PNG, scaled by the browser. Deliberately not a real asset yet.
@@ -174,6 +198,7 @@ async function run() {
   await buildContent();
   await flattenHtml();
   await cleanNested();
+  await copyNetraAssets();
   await writeManifest();
   await writeIcon();
   console.log('built ' + target + ' -> ' + outDir);

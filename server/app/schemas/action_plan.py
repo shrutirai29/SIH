@@ -192,15 +192,24 @@ class Action(
 
 
 class ActionPlan(BaseModel):
+
     model_config = ConfigDict(
         extra='forbid',
     )
+
     plan_id: constr(max_length=32)
     trace_id: constr(pattern=r'^t_[0-9]{1,6}$')
+
     reasoning: constr(max_length=800) | None = None
+    response: constr(max_length=2000) | None = None
+
     actions: list[Action] = Field(..., max_length=3)
+
     expect: Expect | None = None
     next_tier_hint: NextTierHint | None = None
     need_visual: bool | None = None
+
     done: bool
+
     confidence: confloat(ge=0.0, le=1.0) | None = None
+    

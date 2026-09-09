@@ -6,10 +6,10 @@ import {
 import type { Box, DeviceProfile } from '../index.js';
 
 const MODEL_URL =
-  'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite';
+  'assets/models/blaze_face_short_range.tflite';
 
 const WASM_ROOT =
-  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
+  'assets/wasm';
 
 /**
  * MediaPipe implementation of NETRA's face perception stage.

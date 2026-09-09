@@ -151,13 +151,29 @@ export type ActionOp = Action['op'];
 export interface ActionPlan {
   plan_id: string;
   trace_id: string;
+
+  /**
+   * Internal explanation of why the agent chose its actions.
+   * This is optional and is not necessarily shown directly to the user.
+   */
   reasoning?: string;
+
+  /**
+   * A user-facing response generated from the current page and task.
+   *
+   * This allows the agent to answer questions, summarize, analyze, explain,
+   * or report results even when no browser action is required.
+   */
+  response?: string;
+
   actions: Action[];
+
   expect?: {
     page_change?: boolean;
     assert_role?: string;
     assert_text_absent?: string;
   };
+
   next_tier_hint?: Tier;
   need_visual?: boolean;
   done: boolean;

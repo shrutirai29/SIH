@@ -64,6 +64,11 @@ export interface HostPing {
   kind: 'HOST_PING';
 }
 
+export interface DetectFaces {
+  kind: 'DETECT_FACES';
+  image: ImageData;
+}
+
 export type Request =
   | StartTask
   | StopTask
@@ -75,7 +80,8 @@ export type Request =
   | RunCanaryAudit
   | ExtractScreen
   | ExecuteAction
-  | HostPing;
+  | HostPing
+  | DetectFaces;
 
 /* ------------------------------------------------------------------- responses */
 
@@ -161,6 +167,13 @@ export interface CanaryAuditResult {
 export interface ActionResult {
   outcome: 'advanced' | 'no_change' | 'error' | 'blocked';
   detail?: string;
+
+  /** Data extracted from the current page. */
+  data?: Record<string, unknown>;
+
+  /** Question that requires user interaction. */
+  question?: string;
+  options?: string[];
 }
 
 export interface SelfTestResult {
@@ -175,16 +188,18 @@ export type ResponseFor<R extends Request> = R extends StartTask | StopTask | Ge
     : R extends RunCanaryAudit
       ? CanaryAuditResult
       : R extends GetTransmission
-      ? TransmissionView | null
-      : R extends SelfTest
-      ? SelfTestResult
-      : R extends ExtractScreen
-        ? ExtractResult
-        : R extends ExecuteAction
-          ? ActionResult
-          : R extends HostPing
-            ? { ok: true; host: string }
-            : never;
+        ? TransmissionView | null
+        : R extends SelfTest
+          ? SelfTestResult
+          : R extends ExtractScreen
+            ? ExtractResult
+            : R extends ExecuteAction
+              ? ActionResult
+              : R extends HostPing
+                ? { ok: true; host: string }
+                : R extends DetectFaces
+                  ? { faces: readonly [number, number, number, number][] }
+                  : never;
 
 /** Port name used for the side panel's live state subscription. */
 export const PANEL_PORT = 'prahari-panel';

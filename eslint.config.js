@@ -3,20 +3,18 @@ import prahari from 'eslint-plugin-prahari';
 
 export default tseslint.config(
   {
-    ignores: [
-      '**/dist/**',
-      '**/dist-chrome/**',
-      '**/dist-firefox/**',
-      '**/dist-types/**',
-      '**/node_modules/**',
-      '**/coverage/**',
-      // A Python virtualenv is not our source. It also ships vendored JS that trips
-      // the choke-point rule, which would be a false positive on every run.
-      'server/.venv/**',
-      'server/**/__pycache__/**',
-      // Fixtures exist to be violations; linting them would be circular.
-      'tools/eslint-plugin-prahari/test/fixtures/**',
-    ],
+ignores: [
+  '**/dist/**',
+  '**/dist-chrome/**',
+  '**/dist-firefox/**',
+  '**/dist-types/**',
+  '**/node_modules/**',
+  '**/coverage/**',
+  'packages/netra/assets/**',
+  'server/.venv/**',
+  'server/**/__pycache__/**',
+  'tools/eslint-plugin-prahari/test/fixtures/**',
+],
   },
 
   ...tseslint.configs.recommended,
