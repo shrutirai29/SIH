@@ -222,6 +222,15 @@ export async function execute(action: Action): Promise<ActionResult> {
 
       case 'click': {
         if (el === null) return { outcome: 'error', detail: 'no target' };
+        const isDisabled =
+          (el instanceof HTMLButtonElement ||
+            el instanceof HTMLInputElement ||
+            el instanceof HTMLSelectElement ||
+            el instanceof HTMLTextAreaElement) &&
+          el.disabled;
+        if (isDisabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) {
+          return { outcome: 'no_change', detail: 'target element is disabled' };
+        }
         if (el instanceof HTMLElement) {
           el.scrollIntoView({ block: 'center' });
           await settle(80);
@@ -292,6 +301,11 @@ export async function execute(action: Action): Promise<ActionResult> {
         if (action.clear_first === true) setNativeValue(el, '');
         setNativeValue(el, value);
         await settle(80);
+        // Read-back verification (Ticket E8): verify target received value
+        // Note: verified locally inside tab without logging or leaking secrets.
+        if (el.value !== value) {
+          return { outcome: 'no_change', detail: 'field value was not updated' };
+        }
         return { outcome: 'advanced' };
       }
 
@@ -299,12 +313,19 @@ export async function execute(action: Action): Promise<ActionResult> {
         if (!(el instanceof HTMLSelectElement)) {
           return { outcome: 'error', detail: 'target is not a select' };
         }
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) {
+          return { outcome: 'no_change', detail: 'target element is disabled' };
+        }
         const option = [...el.options].find(
           (o) => o.value === action.option || o.text.trim() === action.option,
         );
         if (option === undefined) return { outcome: 'no_change', detail: 'option not found' };
         el.value = option.value;
         el.dispatchEvent(new Event('change', { bubbles: true }));
+        // Read-back verification
+        if (el.value !== option.value) {
+          return { outcome: 'no_change', detail: 'select option could not be set' };
+        }
         return { outcome: 'advanced' };
       }
 
@@ -354,7 +375,8 @@ case 'extract': {
 
 case 'ask_user': {
   const result: ActionResult = {
-    outcome: 'advanced',
+    outcome: 'no_change',
+    detail: 'awaiting user interaction',
     question: action.question,
   };
 

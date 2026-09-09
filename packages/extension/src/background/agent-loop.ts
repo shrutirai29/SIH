@@ -145,12 +145,19 @@ async start(goal: string): Promise<AgentState> {
   return this.#state;
 }
 
+  #isTerminal(): boolean {
+    const p = this.#state.phase;
+    return p === 'done' || p === 'blocked' || p === 'error';
+  }
+
   async #run(goal: string, sessionId: string, signal: AbortSignal): Promise<void> {
     let needVisual = false;
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_RECOVERIES = 3;
     const history: HistoryItem[] = [];
 
     for (let step = 0; step < CONFIG.maxSteps; step++) {
-      if (signal.aborted) return;
+      if (signal.aborted || this.#isTerminal()) return;
 
       const traceId = 't_' + String(step);
       // ---- observe + sanitize (both happen inside the tab) ----------------------
@@ -173,7 +180,7 @@ async start(goal: string): Promise<AgentState> {
 
   return;
 }
-      if (signal.aborted) return;
+      if (signal.aborted || this.#isTerminal()) return;
 
       if (history.length > 0) {
         extract.ssg.history = [...history];
@@ -250,7 +257,7 @@ async start(goal: string): Promise<AgentState> {
       // ---- guard + send --------------------------------------------------------
       this.#patch({ phase: 'sending', message: 'Checking the payload before it leaves…' });
       const result = await postStep(this.#guard, extract.ssg, imageBlob);
-      if (signal.aborted) return;
+      if (signal.aborted || this.#isTerminal()) return;
 
       if (!result.ok) {
         if (result.kind === 'blocked') {
@@ -312,7 +319,7 @@ async start(goal: string): Promise<AgentState> {
       const plan: ActionPlan = result.plan;
       needVisual = plan.need_visual === true;
       const outcome = await this.#actAll(plan.actions, step, history, signal);
-      if (signal.aborted) return;
+      if (signal.aborted || this.#isTerminal()) return;
 
       if (plan.done || plan.actions.some((a) => a.op === 'done')) {
         const doneAction = plan.actions.find((a) => a.op === 'done');
@@ -329,14 +336,26 @@ async start(goal: string): Promise<AgentState> {
 
         return;
       }
-      if (outcome === 'error') {
-        this.#patch({ phase: 'error', message: 'An action failed. Stopping.' });
+
+      if (outcome === 'blocked') {
+        // Security block or awaiting user — stop immediately, do NOT retry
         return;
       }
-      if (outcome === 'blocked') {
-        // Already surfaced with its reason by #actAll. Stop rather than retry: a
-        // refused action refused for a reason, and repeating it would repeat the ask.
-        return;
+
+      if (outcome === 'error' || outcome === 'no_change') {
+        consecutiveFailures++;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_RECOVERIES) {
+          this.#patch({
+            phase: 'error',
+            message: 'Exceeded recovery budget (' + String(MAX_CONSECUTIVE_RECOVERIES) + ' consecutive failures). Stopping.',
+          });
+          return;
+        }
+        this.#patch({
+          message: 'Action had ' + outcome + ', replanning (recovery attempt ' + String(consecutiveFailures) + '/' + String(MAX_CONSECUTIVE_RECOVERIES) + ')…',
+        });
+      } else if (outcome === 'advanced') {
+        consecutiveFailures = 0;
       }
 
       await sleep(CONFIG.settleMs);
@@ -353,15 +372,53 @@ async start(goal: string): Promise<AgentState> {
   ): Promise<ActionResult['outcome']> {
     let last: ActionResult['outcome'] = 'no_change';
     for (const action of actions) {
-      if (signal.aborted) return 'blocked';
-      if (action.op === 'done' || action.op === 'fail') {
+      if (signal.aborted || this.#isTerminal()) return 'blocked';
+
+      if (action.op === 'done') {
         history.push({
           step,
-          action: action.op,
+          action: 'done',
           outcome: 'advanced',
         });
         if (history.length > 20) history.shift();
         return 'advanced';
+      }
+
+      if (action.op === 'fail') {
+        history.push({
+          step,
+          action: 'fail',
+          outcome: 'error',
+        });
+        if (history.length > 20) history.shift();
+        this.#patch({
+          phase: 'error',
+          message: action.reason ?? 'Agent reported task failure.',
+        });
+        return 'error';
+      }
+
+      if (action.op === 'ask_user') {
+        history.push({
+          step,
+          action: 'ask_user',
+          outcome: 'no_change',
+        });
+        if (history.length > 20) history.shift();
+
+        // TODO/DEFERRED(ask_user-resume):
+        // Legitimate human interaction required. The existing AgentPhase contract
+        // ('idle'|'observing'|'sanitizing'|'sending'|'thinking'|'acting'|'done'|'blocked'|'error')
+        // does not define a dedicated 'waiting_for_user' phase, nor does messages.ts define a
+        // 'RESUME_TASK' / 'USER_RESPONSE' request. To safely pause without modifying SSG or
+        // inventing a premature messaging protocol, ask_user is paused via the terminal 'blocked'
+        // phase with a user-facing prompt ("Awaiting user response: ..."), ensuring zero browser
+        // actions are dispatched and no automatic retry occurs until interactive resume is added.
+        this.#patch({
+          phase: 'blocked',
+          message: 'Awaiting user response: ' + action.question,
+        });
+        return 'blocked';
       }
 
       this.#patch({ phase: 'acting', message: 'Executing: ' + action.op });
@@ -381,8 +438,7 @@ async start(goal: string): Promise<AgentState> {
       });
       if (history.length > 20) history.shift();
 
-      // A refused action is the system defending itself; the user must see WHY, and
-      // a sink-binding refusal is the single most important thing this UI can say.
+      // A refused action is the system defending itself; the user must see WHY
       if (res.outcome === 'blocked') {
         this.#patch({
           phase: 'blocked',
@@ -391,7 +447,16 @@ async start(goal: string): Promise<AgentState> {
         });
         return 'blocked';
       }
-      if (res.outcome === 'error') return 'error';
+
+      // If an intermediate action in a multi-action plan fails or yields no change,
+      // abort remaining actions from this plan to allow re-observation and bounded recovery.
+      if (res.outcome === 'error') {
+        return 'error';
+      }
+
+      if (res.outcome === 'no_change') {
+        return 'no_change';
+      }
     }
     return last;
   }
@@ -417,6 +482,9 @@ async start(goal: string): Promise<AgentState> {
   }
 
   async #execute(action: Action): Promise<ActionResult> {
+    if (this.#isTerminal()) {
+      return { outcome: 'error', detail: 'Agent is in terminal state' };
+    }
     try {
       const tabId = await this.#activeTabId();
       const reply = (await browser.tabs.sendMessage(tabId, {

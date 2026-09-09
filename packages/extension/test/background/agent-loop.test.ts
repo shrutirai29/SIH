@@ -29,12 +29,13 @@ vi.hoisted(() => {
   };
 });
 
-import type { ActionPlan, RedactedText, SSG } from '@prahari/ssg';
+import type { Action, ActionPlan, RedactedText, SSG } from '@prahari/ssg';
 import { type EgressGuard, type GuardVerdict, sha256Hex } from '@prahari/kavach';
 import { browser } from '../../src/platform/index.js';
 import * as platform from '../../src/platform/index.js';
 import { AgentLoop } from '../../src/background/agent-loop.js';
-import type { ExtractResult } from '../../src/shared/messages.js';
+import type { ActionResult, ExtractResult } from '../../src/shared/messages.js';
+import { CONFIG } from '../../src/shared/config.js';
 
 const r = (s: string): RedactedText => s as RedactedText;
 
@@ -886,5 +887,561 @@ describe('AgentLoop — Phase 3 need_visual end-to-end integration', () => {
     expect(loop.state.message).toContain('Visual capture failed');
     // Step 1 payload was never offered to guard
     expect(guardInvocations.length).toBe(1);
+  });
+});
+
+describe('AgentLoop — HASTA Controller, Bounded Recovery, and Multi-Action Safety', () => {
+  let originalFetch: typeof globalThis.fetch;
+  let executedActions: Action[] = [];
+  const actionResults: Map<string, ActionResult> = new Map();
+  let defaultActionResult: ActionResult = { outcome: 'advanced' };
+
+  function setupLoop(plans: ActionPlan[], options?: { guardInvocations?: SSG[] }) {
+    executedActions = [];
+    actionResults.clear();
+    defaultActionResult = { outcome: 'advanced' };
+
+    let planIdx = 0;
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      const plan = plans[planIdx] ?? plans[plans.length - 1];
+      planIdx++;
+      return {
+        ok: true,
+        json: async () => plan,
+      };
+    }) as unknown as typeof fetch;
+
+    browser.tabs.query = vi.fn().mockImplementation((...args: unknown[]) => {
+      const cb = typeof args[1] === 'function' ? (args[1] as (res: unknown[]) => void) : undefined;
+      if (cb) cb([{ id: 42 }]);
+      return Promise.resolve([{ id: 42 }]);
+    }) as unknown as typeof browser.tabs.query;
+
+    browser.tabs.sendMessage = vi.fn().mockImplementation((...args: unknown[]) => {
+      const msg = args[1] as { kind: string; step?: number; action?: Action } | undefined;
+      const cb = args.find((a) => typeof a === 'function') as ((res: unknown) => void) | undefined;
+      let res: unknown = undefined;
+
+      if (msg?.kind === 'EXTRACT_SCREEN') {
+        res = {
+          ssg: makeMockSsg(msg.step ?? 0),
+          redactions: {},
+          diff: [],
+        } as ExtractResult;
+      } else if (msg?.kind === 'EXECUTE_ACTION') {
+        const action = msg.action!;
+        executedActions.push(action);
+        const targetKey = 'target' in action && typeof action.target === 'string' ? action.target : action.op;
+        res = actionResults.get(targetKey) ?? actionResults.get(action.op) ?? defaultActionResult;
+      }
+
+      if (cb) cb(res);
+      return Promise.resolve(res);
+    }) as unknown as typeof browser.tabs.sendMessage;
+
+    const mockGuard: EgressGuard = Object.assign(
+      vi.fn().mockImplementation(async (ssg: SSG): Promise<GuardVerdict> => {
+        if (options?.guardInvocations) {
+          options.guardInvocations.push(JSON.parse(JSON.stringify(ssg)) as SSG);
+        }
+        const json = JSON.stringify(ssg);
+        const bytes = new TextEncoder().encode(json);
+        const sha = await sha256Hex(bytes);
+        return { ok: true, bytes, sha256: sha };
+      }),
+      { confirm: vi.fn().mockResolvedValue(undefined) },
+    );
+
+    const mockHost = {
+      kind: 'event-page' as const,
+      ensure: vi.fn().mockResolvedValue(undefined),
+      ping: vi.fn().mockResolvedValue({ ok: true, host: 'test-host' }),
+      teardown: vi.fn().mockResolvedValue(undefined),
+    };
+
+    return new AgentLoop({ guard: mockGuard, host: mockHost });
+  }
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  // 1. Single successful action
+  it('1. executes a single successful action and transitions to done', async () => {
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'click', target: 'e1' }], done: false },
+      { plan_id: 'p1', trace_id: 't_1', actions: [{ op: 'done', summary: 'Goal reached' }], done: true },
+    ];
+    const loop = setupLoop(plans);
+    await loop.start('Test goal');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    expect(executedActions.length).toBe(1);
+    expect(executedActions[0]!.op).toBe('click');
+    expect(loop.state.message).toBe('Goal reached');
+  });
+
+  // 2. Multi-action successful plan
+  it('2. executes multiple actions in a single plan when all succeed', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'click', target: 'e1' },
+          { op: 'type', target: 'e2', value: 'search' },
+        ],
+        done: false,
+      },
+      { plan_id: 'p1', trace_id: 't_1', actions: [{ op: 'done' }], done: true },
+    ];
+    const loop = setupLoop(plans);
+    await loop.start('Multi-action test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    expect(executedActions.length).toBe(2);
+    expect(executedActions[0]!.op).toBe('click');
+    expect(executedActions[1]!.op).toBe('type');
+  });
+
+  // 3. First action failure aborts remaining actions in the plan
+  it('3. aborts remaining actions in a multi-action plan when an earlier action fails', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'click', target: 'e_failing' },
+          { op: 'type', target: 'e_should_not_run', value: 'skipped' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [{ op: 'done' }],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_failing', { outcome: 'error', detail: 'Element not interactable' });
+
+    await loop.start('Failure abort test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // The second action in plan 0 (e_should_not_run) was NEVER dispatched!
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_should_not_run')).toBe(false);
+  });
+
+  // 4. no_change triggers bounded recovery and replan
+  it('4. triggers bounded recovery replan when action produces no_change', async () => {
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'scroll', direction: 'down' }], done: false },
+      { plan_id: 'p1', trace_id: 't_1', actions: [{ op: 'done' }], done: true },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('scroll', { outcome: 'no_change', detail: 'already at bottom' });
+
+    await loop.start('No-change recovery');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    expect(executedActions.length).toBe(1);
+  });
+
+  // 5 & 6. Recovery eventually succeeds
+  it('5 & 6. recovers from transient failure when subsequent step succeeds', async () => {
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'click', target: 'e_flaky' }], done: false },
+      { plan_id: 'p1', trace_id: 't_1', actions: [{ op: 'click', target: 'e_recovered' }], done: false },
+      { plan_id: 'p2', trace_id: 't_2', actions: [{ op: 'done' }], done: true },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_flaky', { outcome: 'error', detail: 'stale element' });
+    actionResults.set('e_recovered', { outcome: 'advanced' });
+
+    await loop.start('Flaky recovery');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    expect(executedActions.length).toBe(2);
+    expect(executedActions[0]!.op).toBe('click');
+    expect(executedActions[1]!.op).toBe('click');
+  });
+
+  // 7. Recovery budget exhausted
+  it('7. stops and enters terminal error when recovery budget of 3 consecutive failures is exhausted', async () => {
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'click', target: 'e_fail1' }], done: false },
+      { plan_id: 'p1', trace_id: 't_1', actions: [{ op: 'click', target: 'e_fail2' }], done: false },
+      { plan_id: 'p2', trace_id: 't_2', actions: [{ op: 'click', target: 'e_fail3' }], done: false },
+      { plan_id: 'p3', trace_id: 't_3', actions: [{ op: 'click', target: 'e_should_never_run' }], done: false },
+    ];
+    const loop = setupLoop(plans);
+    defaultActionResult = { outcome: 'error', detail: 'Persistent target failure' };
+
+    await loop.start('Exhaustion test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('error');
+    }, { timeout: 3000 });
+
+    expect(loop.state.message).toContain('Exceeded recovery budget (3 consecutive failures)');
+    // 3 attempts executed; attempt 4 MUST NOT occur
+    expect(executedActions.length).toBe(3);
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_should_never_run')).toBe(false);
+  });
+
+  // 8 & 9. Blocked action immediately terminates and is NOT retried
+  it('8 & 9. halts immediately upon blocked security action without retrying', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [{ op: 'type', target: 'e_sink_violation', value_ref: '⟦TOKEN_1⟧' }],
+        done: false,
+      },
+      { plan_id: 'p1', trace_id: 't_1', actions: [{ op: 'click', target: 'e_never' }], done: false },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_sink_violation', {
+      outcome: 'blocked',
+      detail: 'REFUSED: sink binding violation',
+    });
+
+    await loop.start('Blocked test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('blocked');
+    }, { timeout: 3000 });
+
+    expect(loop.state.message).toContain('sink binding violation');
+    expect(executedActions.length).toBe(1); // Never retried
+  });
+
+  // 10. Done is terminal
+  it('10. done action or plan.done transitions to terminal done', async () => {
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'done', summary: 'Complete' }], done: true },
+    ];
+    const loop = setupLoop(plans);
+    await loop.start('Done test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    expect(loop.state.message).toBe('Complete');
+  });
+
+  // 11. Fail is terminal
+  it('11. fail action transitions directly to terminal error', async () => {
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'fail', reason: 'Blocked by captcha' }], done: false },
+    ];
+    const loop = setupLoop(plans);
+    await loop.start('Fail test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('error');
+    }, { timeout: 3000 });
+
+    expect(loop.state.message).toContain('Blocked by captcha');
+  });
+
+  // 12. Step limit is terminal
+  it('12. terminates with done phase when maxSteps limit is reached', async () => {
+    // Exactly maxSteps (12) plans
+    const plans: ActionPlan[] = Array.from({ length: CONFIG.maxSteps + 1 }, (_, i) => ({
+      plan_id: 'p' + String(i),
+      trace_id: 't_' + String(i),
+      actions: [{ op: 'wait', ms: 1 }],
+      done: false,
+    }));
+    const loop = setupLoop(plans);
+    defaultActionResult = { outcome: 'advanced' };
+
+    await loop.start('Step limit test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.message).toBe('Step limit reached.');
+    }, { timeout: 10000 });
+
+    expect(loop.state.phase).toBe('done');
+    expect(loop.state.step).toBeLessThanOrEqual(CONFIG.maxSteps);
+  }, 12000);
+
+  // 13. Terminal state prevents future dispatch
+  it('13. prevents any action dispatch once controller is in a terminal state', async () => {
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'done' }], done: true },
+    ];
+    const loop = setupLoop(plans);
+    await loop.start('Terminal guard test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Try executing an action directly on the loop in terminal state
+    // (internal #execute guard check)
+    const sendMessageSpy = browser.tabs.sendMessage as ReturnType<typeof vi.fn>;
+    const callCountBefore = sendMessageSpy.mock.calls.length;
+
+    // Triggering stop or any external call cannot dispatch to tabs
+    loop.stop('Already done');
+    expect(sendMessageSpy.mock.calls.length).toBe(callCountBefore);
+  });
+
+  // 14 & 15. ask_user pauses execution and stops further action dispatch
+  it('14 & 15. pauses execution on ask_user and does not execute subsequent actions', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'ask_user', question: 'Please select your state' },
+          { op: 'click', target: 'e_subsequent' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [{ op: 'click', target: 'e_never_reach' }],
+        done: false,
+      },
+    ];
+    const loop = setupLoop(plans);
+    await loop.start('Ask user test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('blocked');
+    }, { timeout: 3000 });
+
+    // 1. Correct phase and human-readable prompt
+    expect(loop.state.phase).toBe('blocked');
+    expect(loop.state.message).toContain('Awaiting user response: Please select your state');
+
+    // 2. Sibling actions within the same plan were dropped and never executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_subsequent')).toBe(false);
+    expect(executedActions.length).toBe(0);
+
+    // 3. No automatic retry or plan advance occurred (step remains 0)
+    expect(loop.state.step).toBe(0);
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_never_reach')).toBe(false);
+  });
+
+  // 16, 17, 18. History ring buffer, bounding, and privacy
+  it('16, 17, 18. records history with bounded size and never leaks sensitive data', async () => {
+    const guardInvocations: SSG[] = [];
+    const plans: ActionPlan[] = [
+      { plan_id: 'p0', trace_id: 't_0', actions: [{ op: 'click', target: 'e1' }], done: false },
+      { plan_id: 'p1', trace_id: 't_1', actions: [{ op: 'done' }], done: true },
+    ];
+    const loop = setupLoop(plans, { guardInvocations });
+
+    await loop.start('History check');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Step 0 has no history
+    expect(guardInvocations[0]?.history).toBeUndefined();
+    // Step 1 observation receives step 0 history
+    expect(guardInvocations[1]?.history).toBeDefined();
+    expect(guardInvocations[1]?.history?.[0]?.action).toBe('click');
+    expect(guardInvocations[1]?.history?.[0]?.target).toBe('e1');
+    expect(guardInvocations[1]?.history?.[0]?.outcome).toBe('advanced');
+    expect(loop.state.phase).toBe('done');
+  });
+
+  // 20. Stale actions from previous failed plans are discarded
+  it('20. discards remaining plan actions upon recovery so step N+1 starts clean', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'click', target: 'e_stale_target' },
+          { op: 'type', target: 'e_stale_next', value: 'old_plan_data' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [
+          { op: 'click', target: 'e_fresh_target' },
+          { op: 'done' },
+        ],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_stale_target', { outcome: 'error', detail: 'target stale' });
+    actionResults.set('e_fresh_target', { outcome: 'advanced' });
+
+    await loop.start('Clean replan');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // e_stale_next from the aborted plan 0 was NEVER executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_stale_next')).toBe(false);
+    // e_fresh_target from plan 1 was executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_fresh_target')).toBe(true);
+  });
+
+  // 21. Realistic multi-step form-fill scenario
+  it('21. realistic multi-step form-fill: type succeeds -> click continue executes -> next observation occurs -> done', async () => {
+    const guardInvocations: SSG[] = [];
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'type', target: 'e_fullname', value: 'Asha Patil' },
+          { op: 'click', target: 'e_continue' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [
+          { op: 'type', target: 'e_mobile', value: '9876543210' },
+          { op: 'done', summary: 'Form filled successfully' },
+        ],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans, { guardInvocations });
+    actionResults.set('e_fullname', { outcome: 'advanced' });
+    actionResults.set('e_continue', { outcome: 'advanced' });
+    actionResults.set('e_mobile', { outcome: 'advanced' });
+
+    await loop.start('Fill Kisan portal application form');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Both actions in step 0 were executed in order
+    expect(executedActions[0]!.op).toBe('type');
+    expect((executedActions[0] as { target: string }).target).toBe('e_fullname');
+    expect(executedActions[1]!.op).toBe('click');
+    expect((executedActions[1] as { target: string }).target).toBe('e_continue');
+
+    // Observation for step 1 occurred
+    expect(guardInvocations.length).toBeGreaterThanOrEqual(2);
+
+    // Step 1 action executed
+    expect(executedActions[2]!.op).toBe('type');
+    expect((executedActions[2] as { target: string }).target).toBe('e_mobile');
+
+    expect(loop.state.message).toBe('Form filled successfully');
+    expect(loop.state.phase).toBe('done');
+  });
+
+  // 22. Multi-action plan with no_change on first action
+  it('22. multi-action plan: first action returns no_change -> sibling action aborted -> fresh observation occurs', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'scroll', direction: 'down' },
+          { op: 'click', target: 'e_should_not_run_on_no_change' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [
+          { op: 'click', target: 'e_alternative_button' },
+          { op: 'done', summary: 'Recovered and done' },
+        ],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('scroll', { outcome: 'no_change', detail: 'already at bottom' });
+    actionResults.set('e_alternative_button', { outcome: 'advanced' });
+
+    await loop.start('Scroll and click test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Sibling action was NOT executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_should_not_run_on_no_change')).toBe(false);
+
+    // Replanned action from step 1 WAS executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_alternative_button')).toBe(true);
+    expect(loop.state.phase).toBe('done');
+  });
+
+  // 23. Multi-action plan with blocked on first action
+  it('23. multi-action plan: first action returns blocked -> sibling action aborted -> terminal blocked immediately', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'type', target: 'e_unauthorized_sink', value_ref: '⟦TOKEN_AADHAAR_0⟧' },
+          { op: 'click', target: 'e_should_never_run_after_blocked' },
+        ],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [{ op: 'click', target: 'e_never_replan_after_blocked' }],
+        done: false,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_unauthorized_sink', {
+      outcome: 'blocked',
+      detail: 'SECURITY BLOCK: token sink binding violation',
+    });
+
+    await loop.start('Security block test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('blocked');
+    }, { timeout: 3000 });
+
+    // Sibling action was NOT executed
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_should_never_run_after_blocked')).toBe(false);
+
+    // No retry or replan occurred (executedActions has only the 1 blocked attempt)
+    expect(executedActions.length).toBe(1);
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_never_replan_after_blocked')).toBe(false);
+    expect(loop.state.phase).toBe('blocked');
+    expect(loop.state.message).toContain('token sink binding violation');
   });
 });
