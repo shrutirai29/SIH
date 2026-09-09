@@ -221,7 +221,7 @@ def main() -> None:
     uvicorn.run(
         app,
         host=os.environ.get("PRAHARI_HOST", "127.0.0.1"),
-        port=int(os.environ.get("PORT", "8080")),
+        port=int(os.environ.get("PORT", "8081")),
         log_level="info",
     )
 
