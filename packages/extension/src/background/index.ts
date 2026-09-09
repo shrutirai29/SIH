@@ -66,6 +66,7 @@ browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefin
     // Messages addressed to other contexts. Returning undefined leaves the channel
     // open for the offscreen document or content script to answer.
     case 'HOST_PING':
+    case 'DETECT_FACES':
     case 'EXTRACT_SCREEN':
     case 'EXECUTE_ACTION':
       return undefined;
