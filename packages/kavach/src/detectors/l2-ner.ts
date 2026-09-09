@@ -146,14 +146,8 @@ export function spansToDetections(spans: readonly NerSpan[]): Detection[] {
  * Used when the NER endpoint is unavailable. The system continues with L0 + L1
  * coverage only, and `coverageConfidence` reports the reduced capability honestly.
  */
-export function createStubDetector(reason = 'NER endpoint not configured'): L2NerDetector {
-  let warned = false;
-
+export function createStubDetector(_reason = 'NER endpoint not configured'): L2NerDetector {
   const detector = async function stubDetector(_text: string): Promise<NerResult> {
-    if (!warned) {
-      console.warn('[kavach/l2-ner] DEGRADED: ' + reason);
-      warned = true;
-    }
     return {
       spans: [],
       model: 'stub',
@@ -170,6 +164,8 @@ export function createStubDetector(reason = 'NER endpoint not configured'): L2Ne
 // HTTP-backed implementation
 // ---------------------------------------------------------------------------
 
+export type NerFetcher = (url: string, init: RequestInit) => Promise<Response>;
+
 export interface NerEndpointConfig {
   /** Full URL to the NER inference endpoint (e.g. http://localhost:8001/predict). */
   readonly url: string;
@@ -179,6 +175,8 @@ export interface NerEndpointConfig {
   readonly minConfidence?: number;
   /** The entity labels to request from the model. Defaults to L2_CLASSES values. */
   readonly labels?: readonly string[];
+  /** Injected network fetcher (e.g. from background net / message bus). RULES.md P1. */
+  readonly fetcher?: NerFetcher;
 }
 
 /**
@@ -191,6 +189,11 @@ export interface NerEndpointConfig {
  * with zero spans. Never throws.
  */
 export function createHttpDetector(config: NerEndpointConfig): L2NerDetector {
+  if (!config.fetcher) {
+    return createStubDetector('No network fetcher provided (RULES.md P1)');
+  }
+  const fetcher = config.fetcher;
+
   const timeoutMs = config.timeoutMs ?? 5000;
   const minConfidence = config.minConfidence ?? 0.5;
   const labels = config.labels ?? [
@@ -208,7 +211,7 @@ export function createHttpDetector(config: NerEndpointConfig): L2NerDetector {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      const response = await fetch(config.url, {
+      const response = await fetcher(config.url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, labels }),
@@ -219,7 +222,7 @@ export function createHttpDetector(config: NerEndpointConfig): L2NerDetector {
 
       if (!response.ok) {
         isAvailable = false;
-        return degraded(started, 'HTTP ' + String(response.status));
+        return degraded(started);
       }
 
       const body = await response.json() as {
@@ -238,10 +241,9 @@ export function createHttpDetector(config: NerEndpointConfig): L2NerDetector {
         latencyMs,
         degraded: false,
       };
-    } catch (err) {
+    } catch {
       isAvailable = false;
-      const name = err instanceof Error ? err.name : 'Error';
-      return degraded(started, name);
+      return degraded(started);
     }
   };
 
@@ -251,8 +253,7 @@ export function createHttpDetector(config: NerEndpointConfig): L2NerDetector {
 
   return detector as unknown as L2NerDetector;
 
-  function degraded(started: number, reason: string): NerResult {
-    console.warn('[kavach/l2-ner] DEGRADED: ' + reason);
+  function degraded(started: number): NerResult {
     return {
       spans: [],
       model: 'unavailable',
