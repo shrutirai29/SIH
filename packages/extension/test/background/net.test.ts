@@ -174,7 +174,9 @@ describe('net.ts — postStep and visual egress boundary', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.kind).toBe('blocked');
-      expect(result.reason).toBe('IMAGE_UNVERIFIED');
+      if (result.kind === 'blocked') {
+        expect(result.reason).toBe('IMAGE_UNVERIFIED');
+      }
     }
     // Fetch must NEVER be called
     expect(fetchSpy).not.toHaveBeenCalled();

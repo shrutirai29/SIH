@@ -154,7 +154,7 @@ describe('AgentLoop — Phase 3 need_visual end-to-end integration', () => {
       };
     }) as unknown as typeof fetch;
 
-    const guardInvocations: { ssg: SSG; image?: Blob }[] = [];
+    const guardInvocations: { ssg: SSG; image?: Blob | undefined }[] = [];
     const mockGuard: EgressGuard = Object.assign(
       vi.fn().mockImplementation(async (ssg: SSG, image?: Blob): Promise<GuardVerdict> => {
         guardInvocations.push({ ssg: JSON.parse(JSON.stringify(ssg)), image });
@@ -244,7 +244,7 @@ describe('AgentLoop — Phase 3 need_visual end-to-end integration', () => {
       };
     }) as unknown as typeof fetch;
 
-    const guardInvocations: { ssg: SSG; image?: Blob }[] = [];
+    const guardInvocations: { ssg: SSG; image?: Blob | undefined }[] = [];
     const mockGuard: EgressGuard = Object.assign(
       vi.fn().mockImplementation(async (ssg: SSG, image?: Blob): Promise<GuardVerdict> => {
         guardInvocations.push({ ssg: JSON.parse(JSON.stringify(ssg)), image });
@@ -338,7 +338,7 @@ describe('AgentLoop — Phase 3 need_visual end-to-end integration', () => {
       };
     }) as unknown as typeof fetch;
 
-    const guardInvocations: { ssg: SSG; image?: Blob }[] = [];
+    const guardInvocations: { ssg: SSG; image?: Blob | undefined }[] = [];
     const mockGuard: EgressGuard = Object.assign(
       vi.fn().mockImplementation(async (ssg: SSG, image?: Blob): Promise<GuardVerdict> => {
         guardInvocations.push({ ssg: JSON.parse(JSON.stringify(ssg)), image });
@@ -401,7 +401,7 @@ describe('AgentLoop — Phase 3 need_visual end-to-end integration', () => {
       json: async () => step0Plan,
     }) as unknown as typeof fetch;
 
-    const guardInvocations: { ssg: SSG; image?: Blob }[] = [];
+    const guardInvocations: { ssg: SSG; image?: Blob | undefined }[] = [];
     const mockGuard: EgressGuard = Object.assign(
       vi.fn().mockImplementation(async (ssg: SSG, image?: Blob): Promise<GuardVerdict> => {
         guardInvocations.push({ ssg: JSON.parse(JSON.stringify(ssg)), image });
