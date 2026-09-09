@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, confloat, conint, constr
 
@@ -199,28 +199,31 @@ class HistoryItem(BaseModel):
         extra='forbid',
     )
     step: conint(ge=0)
-    action: constr(max_length=32)
+    action: constr(max_length=64) | dict[str, Any]
     target: constr(max_length=16) | None = None
-    outcome: Outcome
+    outcome: Outcome | None = None
 
 
 class Screenshot(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra='ignore',
     )
-    format: Literal['jpeg']
-    w: int
-    h: int
+    format: Literal['jpeg', 'png'] | str = 'png'
+    w: int | None = None
+    h: int | None = None
     q: conint(ge=1, le=100) | None = None
-    sha256: constr(pattern=r'^[0-9a-f]{64}$')
-    redacted: Literal[True]
+    sha256: constr(pattern=r'^[0-9a-f]{64}$') | None = None
+    redacted: Literal[True] | bool = True
+    data: str | None = None
 
 
 class Attachment(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra='ignore',
     )
-    screenshot: Screenshot
+    screenshot: Screenshot | None = None
+    data: str | None = None
+
 
 
 class SanitizedScreenGraph(BaseModel):

@@ -183,6 +183,7 @@ class LlmClient:
 
         attempts = 0
         rate_limit_retries = 0
+        server_error_retries = 0
         last_complaint: str | None = None
 
         async with httpx.AsyncClient(timeout=self.config.timeout_s) as http:
@@ -197,11 +198,16 @@ class LlmClient:
                 import time
 
                 started = time.monotonic()
-                response = await http.post(
-                    self.config.base_url.rstrip("/") + "/chat/completions",
-                    headers=self._headers(),
-                    json=body,
-                )
+                try:
+                    response = await http.post(
+                        self.config.base_url.rstrip("/") + "/chat/completions",
+                        headers=self._headers(),
+                        json=body,
+                    )
+                except httpx.TimeoutException:
+                    raise LlmError("provider connection timed out")
+                except httpx.RequestError as exc:
+                    raise LlmError(f"provider network error: {type(exc).__name__}")
                 latency_ms = int((time.monotonic() - started) * 1000)
 
                 if response.status_code == 400 and mode is DecodeMode.STRICT:
@@ -228,6 +234,16 @@ class LlmClient:
                         mi -= 1  # retry the same tier
                         continue
                     raise LlmError("provider rate-limited after 3 backoffs")
+
+                if response.status_code in (502, 503, 504):
+                    # Transient gateway / provider server errors.
+                    if server_error_retries < 2:
+                        server_error_retries += 1
+                        await asyncio.sleep(1.0 * server_error_retries)
+                        attempts -= 1  # a transport failure is not an attempt at the task
+                        mi -= 1  # retry the same tier
+                        continue
+                    raise LlmError("provider returned HTTP " + str(response.status_code))
 
                 if response.status_code >= 400:
                     raise LlmError("provider returned HTTP " + str(response.status_code))
