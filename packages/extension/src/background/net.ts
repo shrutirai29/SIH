@@ -31,7 +31,7 @@ export type StepResult =
   | { readonly ok: false; readonly kind: 'server'; readonly status: number; readonly detail: string }
   | { readonly ok: false; readonly kind: 'network'; readonly detail: string };
 
-const STEP_TIMEOUT_MS = 20_000;
+const STEP_TIMEOUT_MS = 45_000;
 
 /**
  * Sends one agent step. The guard runs first and its verdict is final.
