@@ -15,6 +15,7 @@ independently, every time.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
@@ -181,6 +182,51 @@ async def agent_step(request: Request) -> Response:
             status_code=422,
         )
 
+    # ---- image sanity guard (ticket F5) ------------------------------------
+    image_data_url: str | None = None
+    attachment = body.get("attachment")
+    if attachment and isinstance(attachment, dict):
+        raw_img = (
+            attachment.get("data")
+            or (attachment.get("screenshot", {}).get("data") if isinstance(attachment.get("screenshot"), dict) else None)
+            or attachment.get("data_url")
+            or (attachment.get("screenshot", {}).get("data_url") if isinstance(attachment.get("screenshot"), dict) else None)
+        )
+        if raw_img:
+            if isinstance(raw_img, bytes):
+                img_bytes = raw_img
+                b64_part = base64.b64encode(img_bytes).decode("ascii")
+                mime = "image/png"
+            elif isinstance(raw_img, str):
+                if raw_img.startswith("data:"):
+                    header, _, b64_part = raw_img.partition(",")
+                    mime = header.split(";")[0].replace("data:", "").strip() or "image/png"
+                else:
+                    b64_part = raw_img
+                    mime = "image/png"
+                try:
+                    img_bytes = base64.b64decode(b64_part)
+                except Exception:
+                    return JSONResponse(
+                        {"error": "IMAGE_INVALID", "detail": "failed to decode base64 image data"},
+                        status_code=422,
+                    )
+            else:
+                return JSONResponse(
+                    {"error": "IMAGE_INVALID", "detail": "unsupported image data type"},
+                    status_code=422,
+                )
+
+            # Validate structural sanity
+            sanity = check_image_sanity(img_bytes)
+            if not sanity.ok:
+                return JSONResponse(
+                    {"error": "IMAGE_INVALID", "detail": sanity.detail},
+                    status_code=422,
+                )
+
+            image_data_url = f"data:{mime};base64,{b64_part.strip()}"
+
     if not llm.config.configured:
         return JSONResponse(
             {
@@ -197,6 +243,7 @@ async def agent_step(request: Request) -> Response:
             user=build_user_prompt(body),
             schema=ACTION_PLAN_SCHEMA,
             validate=make_validator(body, _plan_schema_validate),
+            image_data_url=image_data_url,
         )
     except LlmError as exc:
         return JSONResponse(
