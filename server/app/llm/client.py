@@ -35,6 +35,9 @@ from enum import Enum
 from typing import Any
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class DecodeMode(str, Enum):
@@ -47,20 +50,10 @@ class DecodeMode(str, Enum):
 
 @dataclass
 class LlmConfig:
-    # All three read the environment when the config is *constructed*, not when this
-    # module is imported. A plain default would be frozen at import, which makes a
-    # `.env` loaded by an entry point arrive too late to have any effect - and the
-    # symptom of that is a key that is plainly set and plainly ignored.
-    base_url: str = field(
-        default_factory=lambda: os.environ.get(
-            "PRAHARI_LLM_BASE_URL", "https://openrouter.ai/api/v1"
-        )
+    base_url: str = os.environ.get(
+        "PRAHARI_LLM_BASE_URL", "https://openrouter.ai/api/v1"
     )
-    model: str = field(
-        default_factory=lambda: os.environ.get(
-            "PRAHARI_LLM_MODEL", "qwen/qwen2.5-vl-72b-instruct"
-        )
-    )
+    model: str = os.environ.get("PRAHARI_LLM_MODEL", "qwen/qwen2.5-vl-72b-instruct")
     api_key: str = field(
         default_factory=lambda: os.environ.get("PRAHARI_LLM_API_KEY", "")
     )
@@ -88,19 +81,7 @@ class LlmResult:
 
 
 class LlmError(RuntimeError):
-    """Never carries provider response bodies: they can echo the prompt back.
-
-    `complaint` is set only when the ladder was spent on *validation* failures, and
-    carries the validator's last objection - which is our own text, not the provider's.
-    A caller can then tell "the model kept producing an invalid plan" apart from "the
-    endpoint was unreachable", and those two deserve opposite responses: the first is
-    worth retrying differently (MANTRI escalates it to vision), the second is not worth
-    retrying at all.
-    """
-
-    def __init__(self, message: str, *, complaint: str | None = None) -> None:
-        super().__init__(message)
-        self.complaint = complaint
+    """Never carries provider response bodies: they can echo the prompt back."""
 
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
@@ -179,8 +160,6 @@ class LlmClient:
         schema: dict[str, Any],
         validate: Any,
         image_data_url: str | None = None,
-        examples: list[dict[str, Any]] | None = None,
-        model: str | None = None,
     ) -> LlmResult:
         """Asks for one action plan, escalating through the decode tiers.
 
@@ -200,18 +179,13 @@ class LlmClient:
                 {"type": "image_url", "image_url": {"url": image_data_url}},
             ]
 
-        # Few-shot exemplars go between the system prompt and the live screen as real
-        # alternating turns (ticket G2). A model treats a prior assistant turn as
-        # something it wrote and continues in that register; the same examples pasted
-        # into the system prompt are only text *about* the format.
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
-        if examples:
-            messages.extend(examples)
-        messages.append({"role": "user", "content": content})
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": content},
+        ]
 
         attempts = 0
         rate_limit_retries = 0
-        server_error_retries = 0
         last_complaint: str | None = None
 
         async with httpx.AsyncClient(timeout=self.config.timeout_s) as http:
@@ -221,21 +195,16 @@ class LlmClient:
                 mode = modes[mi]
                 mi += 1
                 attempts += 1
-                body = self._body(messages, mode, schema, model=model)
+                body = self._body(messages, mode, schema)
 
                 import time
 
                 started = time.monotonic()
-                try:
-                    response = await http.post(
-                        self.config.base_url.rstrip("/") + "/chat/completions",
-                        headers=self._headers(),
-                        json=body,
-                    )
-                except httpx.TimeoutException:
-                    raise LlmError("provider connection timed out")
-                except httpx.RequestError as exc:
-                    raise LlmError(f"provider network error: {type(exc).__name__}")
+                response = await http.post(
+                    self.config.base_url.rstrip("/") + "/chat/completions",
+                    headers=self._headers(),
+                    json=body,
+                )
                 latency_ms = int((time.monotonic() - started) * 1000)
 
                 if response.status_code == 400 and mode is DecodeMode.STRICT:
@@ -262,16 +231,6 @@ class LlmClient:
                         mi -= 1  # retry the same tier
                         continue
                     raise LlmError("provider rate-limited after 3 backoffs")
-
-                if response.status_code in (502, 503, 504):
-                    # Transient gateway / provider server errors.
-                    if server_error_retries < 2:
-                        server_error_retries += 1
-                        await asyncio.sleep(1.0 * server_error_retries)
-                        attempts -= 1  # a transport failure is not an attempt at the task
-                        mi -= 1  # retry the same tier
-                        continue
-                    raise LlmError("provider returned HTTP " + str(response.status_code))
 
                 if response.status_code >= 400:
                     raise LlmError("provider returned HTTP " + str(response.status_code))
@@ -320,8 +279,7 @@ class LlmClient:
 
         raise LlmError(
             "no schema-valid plan after " + str(attempts) + " attempts: "
-            + (last_complaint or "unknown"),
-            complaint=last_complaint,
+            + (last_complaint or "unknown")
         )
 
     def _modes(self) -> list[DecodeMode]:
@@ -330,14 +288,10 @@ class LlmClient:
         return [DecodeMode.STRICT, DecodeMode.JSON, DecodeMode.RETRY]
 
     def _body(
-        self,
-        messages: list[dict[str, Any]],
-        mode: DecodeMode,
-        schema: dict[str, Any],
-        model: str | None = None,
+        self, messages: list[dict[str, Any]], mode: DecodeMode, schema: dict[str, Any]
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
-            "model": model or self.config.model,
+            "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,

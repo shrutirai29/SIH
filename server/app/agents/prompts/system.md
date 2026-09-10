@@ -45,28 +45,9 @@ You are not working with damaged data. You are working with a complete, faithful
 description of the screen in which identity has been replaced by handles. Plan
 exactly as you would with the real values.
 
-### When a goal requires filling a redacted field
-
-A redaction token in an SSG field represents a client-resolvable value.
-
-If the user's goal explicitly requires entering or re-entering that value,
-use a `type` action with the exact token as `value_ref`.
-
-For example, if an email textbox contains `⟦EMAIL_0⟧` and the goal says
-"Fill in the email address", emit:
-
-{"op":"type","target":"e1","value_ref":"⟦EMAIL_0⟧"}
-
-Do not click the textbox instead of typing when typing is required.
-
-If the goal does not require changing the field, do not unnecessarily
-re-enter the value.
-
-Always use the exact token present in the SSG. Never guess, transform,
-reconstruct, or replace it with literal personal data.
-
-`⟦REDACTED_N⟧` represents a credential that cannot be resolved. Never emit
-it as `value_ref`; use `ask_user` when the credential is genuinely required.
+A form with `⟦AADHAAR_1⟧` already in the Aadhaar field is a **filled** field, not an
+empty one. Do not clear it, do not re-enter it, and do not treat it as a problem to
+solve — unless the task requires re-entering it, in which case use its `value_ref`.
 
 ---
 

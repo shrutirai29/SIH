@@ -12,7 +12,6 @@ import type { Runtime } from 'webextension-polyfill';
 import { browser } from '../platform/index.js';
 import { PANEL_PORT, type AgentState, type PanelPush, type Request } from '../shared/messages.js';
 import { AgentManager } from './agent-manager.js';
-import { ExtensionLedgerStore } from './ledger-store.js';
 
 const manager = new AgentManager();
 manager.listenToTabEvents();
@@ -156,53 +155,57 @@ manager.onStateChange(async (tabId, state) => {
 /* ------------------------------------------------------------- request handling */
 
 async function getEffectiveTabId(msgTabId?: number, senderTabId?: number): Promise<number | undefined> {
-  const isWeb = (u?: string) =>
-    Boolean(
-      u &&
+  if (typeof msgTabId === 'number') return msgTabId;
+  if (typeof senderTabId === 'number') {
+    try {
+      const senderTab = await browser.tabs.get(senderTabId);
+      const url = senderTab?.url || '';
+      if (
+        !url.startsWith('chrome://') &&
+        !url.startsWith('chrome-extension://') &&
+        !url.startsWith('about:') &&
+        !url.startsWith('edge://') &&
+        !url.startsWith('moz-extension://')
+      ) {
+        return senderTabId;
+      }
+    } catch {
+      // Ignore tab get errors
+    }
+  }
+  try {
+    const activeTabs = await browser.tabs.query({ active: true, currentWindow: true });
+    for (const t of activeTabs) {
+      if (t.id === undefined) continue;
+      const u = t.url || '';
+      if (
         !u.startsWith('chrome://') &&
         !u.startsWith('chrome-extension://') &&
-        !u.startsWith('edge://') &&
         !u.startsWith('about:') &&
-        !u.startsWith('moz-extension://'),
-    );
-
-  if (typeof msgTabId === 'number' && msgTabId > 0) {
-    try {
-      const tab = await browser.tabs.get(msgTabId);
-      if (tab?.id !== undefined && isWeb(tab.url)) return tab.id;
-    } catch {
-      // ignore
+        !u.startsWith('edge://') &&
+        !u.startsWith('moz-extension://')
+      ) {
+        return t.id;
+      }
     }
-  }
-  if (typeof senderTabId === 'number' && senderTabId > 0) {
-    try {
-      const tab = await browser.tabs.get(senderTabId);
-      if (tab?.id !== undefined && isWeb(tab.url)) return tab.id;
-    } catch {
-      // ignore
-    }
-  }
-  try {
-    const [focused] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
-    if (focused?.id !== undefined && isWeb(focused.url)) return focused.id;
-  } catch {
-    // ignore
-  }
-  try {
-    const activeTabs = await browser.tabs.query({ active: true });
-    const webActive = activeTabs.find((t) => isWeb(t.url));
-    if (webActive?.id !== undefined) return webActive.id;
-  } catch {
-    // ignore
-  }
-  try {
     const allTabs = await browser.tabs.query({});
-    const webTab = allTabs.find((t) => isWeb(t.url));
-    if (webTab?.id !== undefined) return webTab.id;
+    for (const t of allTabs) {
+      if (t.id === undefined) continue;
+      const u = t.url || '';
+      if (
+        !u.startsWith('chrome://') &&
+        !u.startsWith('chrome-extension://') &&
+        !u.startsWith('about:') &&
+        !u.startsWith('edge://') &&
+        !u.startsWith('moz-extension://')
+      ) {
+        return t.id;
+      }
+    }
+    return undefined;
   } catch {
-    // ignore
+    return undefined;
   }
-  return msgTabId ?? senderTabId;
 }
 
 browser.runtime.onMessage.addListener(
@@ -212,28 +215,13 @@ browser.runtime.onMessage.addListener(
 
     switch (msg.kind) {
       case 'START_TASK': {
-        const startMsg = msg as { kind: 'START_TASK'; goal: string; tabId?: number; autoFillPrefilled?: boolean; userProfile?: unknown };
+        const startMsg = msg as { kind: 'START_TASK'; goal: string; tabId?: number };
         return (async () => {
           const tabId = await getEffectiveTabId(startMsg.tabId, sender.tab?.id);
           if (tabId === undefined) {
             throw new Error('START_TASK requires a valid tabId or active tab');
           }
-          // Load any permanently-saved field answers from storage so the agent
-          // pre-populates them without asking the user again.
-          let savedFields: Record<string, string> = {};
-          try {
-            const stored = await browser.storage.local.get('prahari_saved_fields');
-            if (stored['prahari_saved_fields'] && typeof stored['prahari_saved_fields'] === 'object') {
-              savedFields = stored['prahari_saved_fields'] as Record<string, string>;
-            }
-          } catch {
-            // Ignore storage errors — saved fields are a convenience, not critical.
-          }
-          return manager.start(tabId, startMsg.goal, {
-            autoFillPrefilled: startMsg.autoFillPrefilled,
-            userProfile: startMsg.userProfile as import('../shared/profile.js').UserProfile | undefined,
-            savedFields,
-          });
+          return manager.start(tabId, startMsg.goal);
         })();
       }
 
@@ -278,16 +266,9 @@ browser.runtime.onMessage.addListener(
         const ledgerMsg = msg as { kind: 'GET_LEDGER'; tabId?: number };
         return (async () => {
           const tabId = await getEffectiveTabId(ledgerMsg.tabId, sender.tab?.id);
-          if (typeof tabId === 'number') {
-            const loop = manager.get(tabId);
-            if (loop) return loop.ledger.list();
-          }
-          for (const [, loop] of manager.all()) {
-            const list = await loop.ledger.list();
-            if (list.length > 0) return list;
-          }
-          const store = new ExtensionLedgerStore();
-          return store.read();
+          if (tabId === undefined) return [];
+          const loop = manager.get(tabId);
+          return loop ? loop.ledger.list() : [];
         })();
       }
 
@@ -314,8 +295,17 @@ browser.runtime.onMessage.addListener(
       case 'RUN_CANARY_AUDIT': {
         const canaryMsg = msg as { kind: 'RUN_CANARY_AUDIT'; tabId?: number };
         return (async () => {
-          const tabId = await getEffectiveTabId(canaryMsg.tabId, sender.tab?.id);
-          const loop = manager.getOrCreate(tabId ?? 0);
+          let tabId = await getEffectiveTabId(canaryMsg.tabId, sender.tab?.id);
+          if (tabId === undefined) {
+            try {
+              const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
+              tabId = activeTab?.id;
+            } catch {
+              tabId = undefined;
+            }
+          }
+          if (tabId === undefined) throw new Error('RUN_CANARY_AUDIT requires a valid tabId');
+          const loop = manager.getOrCreate(tabId);
           return loop.canaryAudit();
         })();
       }
@@ -323,16 +313,10 @@ browser.runtime.onMessage.addListener(
       case 'GET_TRANSMISSION': {
         const transMsg = msg as { kind: 'GET_TRANSMISSION'; traceId: string; tabId?: number };
         return (async () => {
-          if (typeof transMsg.tabId === 'number') {
-            const loop = manager.get(transMsg.tabId);
-            const found = loop?.transmissions.get(transMsg.traceId);
-            if (found) return found;
-          }
-          for (const [, loop] of manager.all()) {
-            const found = loop.transmissions.get(transMsg.traceId);
-            if (found) return found;
-          }
-          return null;
+          const tabId = await getEffectiveTabId(transMsg.tabId, sender.tab?.id);
+          if (tabId === undefined) return null;
+          const loop = manager.get(tabId);
+          return loop?.transmissions.get(transMsg.traceId) ?? null;
         })();
       }
 
@@ -343,7 +327,11 @@ browser.runtime.onMessage.addListener(
           if (loop) {
             clearBadgeForTask(loop.taskId);
           }
-          browser.tabs.update(focusMsg.tabId, { active: true }).catch(() => {});
+          browser.tabs.update(focusMsg.tabId, { active: true }).then((tab) => {
+            if (tab && typeof tab.windowId === 'number') {
+              browser.windows.update(tab.windowId, { focused: true }).catch(() => {});
+            }
+          }).catch(() => {});
           return Promise.resolve({ ok: true });
         }
         return Promise.resolve({ ok: false });
@@ -361,37 +349,6 @@ browser.runtime.onMessage.addListener(
       case 'TASK_NOTIFY':
         return undefined;
 
-      case 'ANSWER_QUESTION': {
-        const answerMsg = msg as { kind: 'ANSWER_QUESTION'; tabId?: number; fieldKey: string; value: string };
-        return (async () => {
-          const tabId = await getEffectiveTabId(answerMsg.tabId, sender.tab?.id);
-          if (tabId === undefined) return { ok: false };
-          const loop = manager.get(tabId);
-          if (loop) {
-            loop.provideAnswer(answerMsg.fieldKey, answerMsg.value);
-            return { ok: true };
-          }
-          return { ok: false };
-        })();
-      }
-
-      case 'SAVE_FIELD': {
-        // Persist a field answer permanently so future tasks skip asking.
-        const saveMsg = msg as { kind: 'SAVE_FIELD'; fieldKey: string; label: string; value: string };
-        return (async () => {
-          try {
-            const stored = await browser.storage.local.get('prahari_saved_fields');
-            const existing: Record<string, string> =
-              (stored['prahari_saved_fields'] as Record<string, string>) ?? {};
-            existing[saveMsg.fieldKey] = saveMsg.value;
-            await browser.storage.local.set({ prahari_saved_fields: existing });
-            return { ok: true };
-          } catch {
-            return { ok: false };
-          }
-        })();
-      }
-
       default: {
         return undefined;
       }
@@ -401,25 +358,11 @@ browser.runtime.onMessage.addListener(
 
 /* --------------------------------------------------------------- toolbar action */
 
-// On extension toolbar click:
-//   1. Open the side panel (primary action - the user's main control UI)
-//   2. Inject/show the floating mascot icon on the active page (so the agent can be seen on-page)
+// On extension toolbar click, toggle or inject the floating mascot icon on the active webpage
 browser.action.onClicked.addListener(async (tab) => {
   if (tab.id === undefined) return;
 
-  // Step 1: Open the side panel
-  try {
-    const sidePanel = (globalThis as unknown as {
-      chrome?: { sidePanel?: { open: (opts: { tabId?: number }) => Promise<void> } };
-    }).chrome?.sidePanel;
-    if (sidePanel?.open) {
-      await sidePanel.open({ tabId: tab.id });
-    }
-  } catch (e) {
-    console.warn('PRAHARI: could not open side panel:', e);
-  }
-
-  // Step 2: Toggle the floating mascot on the page (only for real web pages)
+  // Do not try to inject on restricted browser pages (chrome://, edge://, about:)
   const url = tab.url || '';
   if (
     url.startsWith('chrome://') ||
@@ -427,16 +370,19 @@ browser.action.onClicked.addListener(async (tab) => {
     url.startsWith('about:') ||
     url.startsWith('edge://')
   ) {
-    return; // Cannot inject into browser internal pages
+    console.warn('Cannot inject mascot into internal browser pages:', url);
+    return;
   }
 
   try {
     const res = (await browser.tabs.sendMessage(tab.id, { kind: 'TOGGLE_MASCOT' })) as
       | { visible?: boolean }
       | undefined;
-    if (res === undefined) throw new Error('No response');
+    if (res === undefined) {
+      throw new Error('No response from content script');
+    }
   } catch {
-    // Content script not yet active — inject it first then show mascot
+    // Content script not yet active on this tab -> dynamically inject and show mascot
     try {
       if (browser.scripting) {
         await browser.scripting.executeScript({
@@ -456,4 +402,3 @@ browser.action.onClicked.addListener(async (tab) => {
     }
   }
 });
-

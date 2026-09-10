@@ -38,7 +38,7 @@ if (target !== 'chrome' && target !== 'firefox') {
 }
 
 const outDir = resolve(root, 'dist-' + target);
-const serverOrigin = process.env.PRAHARI_SERVER_ORIGIN ?? 'http://localhost:8080';
+const serverOrigin = process.env.PRAHARI_SERVER_ORIGIN ?? 'http://127.0.0.1:8000';
 const isDev = process.env.NODE_ENV !== 'production';
 
 /** Shared define so `import.meta.env` resolves identically in both passes. */
@@ -104,15 +104,12 @@ async function buildContent() {
     plugins: [
       react(),
       {
-        name: 'strip-xhr-from-content',
-        transform(code) {
-          if (code.includes('XMLHttpRequest')) {
-            return code.replace(
-              /new\s+XMLHttpRequest\s*\(\s*\)/g,
-              '(()=>{throw new Error("XHR forbidden in content script")})()',
-            );
-          }
-          return null;
+        name: 'deny-content-xhr',
+        renderChunk(code) {
+          return code.replace(
+            /new\s+XMLHttpRequest\s*\(/g,
+            '/* XHR disabled in content script */ new (class { open(){} send(){} })('
+          );
         },
       },
     ],

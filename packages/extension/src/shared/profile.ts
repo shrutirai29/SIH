@@ -6,6 +6,7 @@ export interface UserProfile {
   phone: string;
   email: string;
   dob: string;
+  usePrefilledData: boolean;
 }
 
 export const DEFAULT_PROFILE: UserProfile = {
@@ -14,6 +15,7 @@ export const DEFAULT_PROFILE: UserProfile = {
   phone: '9876543210',
   email: 'nitinmali@example.com',
   dob: '2007-05-31',
+  usePrefilledData: true,
 };
 
 export async function getStoredProfile(): Promise<UserProfile> {
@@ -35,36 +37,3 @@ export async function saveStoredProfile(profile: UserProfile): Promise<void> {
     console.error('[PRAHARI] Error saving profile to storage:', err);
   }
 }
-
-export async function getSavedFields(): Promise<Record<string, string>> {
-  try {
-    const res = await browser.storage.local.get('prahari_saved_fields');
-    if (res && res['prahari_saved_fields'] && typeof res['prahari_saved_fields'] === 'object') {
-      return res['prahari_saved_fields'] as Record<string, string>;
-    }
-  } catch (err) {
-    console.warn('[PRAHARI] Error loading saved fields:', err);
-  }
-  return {};
-}
-
-export async function saveField(key: string, value: string): Promise<void> {
-  try {
-    const existing = await getSavedFields();
-    existing[key] = value;
-    await browser.storage.local.set({ prahari_saved_fields: existing });
-  } catch (err) {
-    console.error('[PRAHARI] Error saving field to storage:', err);
-  }
-}
-
-export async function deleteSavedField(key: string): Promise<void> {
-  try {
-    const existing = await getSavedFields();
-    delete existing[key];
-    await browser.storage.local.set({ prahari_saved_fields: existing });
-  } catch (err) {
-    console.error('[PRAHARI] Error deleting field from storage:', err);
-  }
-}
-

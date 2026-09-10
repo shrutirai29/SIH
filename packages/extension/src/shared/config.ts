@@ -1,6 +1,6 @@
 const RAW_ORIGIN =
   (import.meta.env['VITE_PRAHARI_SERVER_ORIGIN'] as string | undefined) ??
-  'http://localhost:8080';
+  'http://127.0.0.1:8000';
 
 export const CONFIG = {
   serverOrigin: RAW_ORIGIN,
