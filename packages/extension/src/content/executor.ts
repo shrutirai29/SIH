@@ -1,5 +1,6 @@
 import type { Action, Risk, Target } from '@prahari/ssg';
 import { isToken } from '@prahari/ssg';
+import { containsPii } from '@prahari/kavach/detectors';
 import type { SinkViolation } from '@prahari/kavach';
 import type { ActionResult } from '../shared/messages.js';
 import { elementRegistry } from './extract.js';
@@ -12,19 +13,23 @@ function resolve(target: Target | undefined): Element | null {
   if (typeof target !== 'string') {
     // Coordinate fallback, for canvas surfaces the DOM cannot describe.
     const [x, y] = target.point;
-    return document.elementFromPoint(x, y);
+    return typeof document.elementFromPoint === 'function' ? document.elementFromPoint(x, y) : null;
   }
   const ref = elementRegistry.get(target);
   const el = ref?.deref() ?? null;
   if (el !== null && el.isConnected) return el;
 
   // Fallback 1: Query DOM by data-prahari-id attribute
-  const byAttr = document.querySelector(`[data-prahari-id="${target}"]`);
-  if (byAttr !== null && byAttr.isConnected) return byAttr;
+  if (typeof document.querySelector === 'function') {
+    const byAttr = document.querySelector(`[data-prahari-id="${target}"]`);
+    if (byAttr !== null && byAttr.isConnected) return byAttr;
+  }
 
   // Fallback 2: Query DOM by id attribute
-  const byId = document.getElementById(target);
-  if (byId !== null && byId.isConnected) return byId;
+  if (typeof document.getElementById === 'function') {
+    const byId = document.getElementById(target);
+    if (byId !== null && byId.isConnected) return byId;
+  }
 
   return null;
 }
@@ -246,6 +251,15 @@ export async function execute(action: Action): Promise<ActionResult> {
 
       case 'click': {
         if (el === null) return { outcome: 'error', detail: 'Target element not found on page' };
+        const isDisabled =
+          (el instanceof HTMLButtonElement ||
+            el instanceof HTMLInputElement ||
+            el instanceof HTMLSelectElement ||
+            el instanceof HTMLTextAreaElement) &&
+          el.disabled;
+        if (isDisabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) {
+          return { outcome: 'no_change', detail: 'target element is disabled' };
+        }
         if (el instanceof HTMLElement) {
           el.scrollIntoView({ block: 'center' });
           await settle(80);
@@ -298,9 +312,16 @@ export async function execute(action: Action): Promise<ActionResult> {
           value = resolved.value;
         }
 
-        // S5: verify the server did not send a raw un-vaulted token syntax string as a literal.
-        if (action.value_ref === undefined && isToken(value)) {
-          return { outcome: 'blocked', detail: 'token supplied as a literal value' };
+        // S5: the server must not fabricate an identifier for us to type. Checked only
+        // on LITERALS - a value that came out of the vault is the user's own and is
+        // supposed to look like PII.
+        if (action.value_ref === undefined) {
+          if (containsPii(value)) {
+            return { outcome: 'blocked', detail: 'refused a literal PII value from the server' };
+          }
+          if (isToken(value)) {
+            return { outcome: 'blocked', detail: 'token supplied as a literal value' };
+          }
         }
 
         let targetInput: HTMLInputElement | HTMLTextAreaElement | null = null;
@@ -347,6 +368,11 @@ export async function execute(action: Action): Promise<ActionResult> {
         if (action.clear_first === true) setNativeValue(targetInput, '');
         setNativeValue(targetInput, value);
         await settle(80);
+        // Read-back verification (Ticket E8): verify target received value
+        // Note: verified locally inside tab without logging or leaking secrets.
+        if (targetInput.value !== value) {
+          return { outcome: 'no_change', detail: 'field value was not updated' };
+        }
         return { outcome: 'advanced' };
       }
 
@@ -354,12 +380,19 @@ export async function execute(action: Action): Promise<ActionResult> {
         if (!(el instanceof HTMLSelectElement)) {
           return { outcome: 'error', detail: 'target is not a select' };
         }
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) {
+          return { outcome: 'no_change', detail: 'target element is disabled' };
+        }
         const option = [...el.options].find(
           (o) => o.value === action.option || o.text.trim() === action.option,
         );
         if (option === undefined) return { outcome: 'no_change', detail: 'option not found' };
         el.value = option.value;
         el.dispatchEvent(new Event('change', { bubbles: true }));
+        // Read-back verification
+        if (el.value !== option.value) {
+          return { outcome: 'no_change', detail: 'select option could not be set' };
+        }
         return { outcome: 'advanced' };
       }
 
@@ -409,7 +442,8 @@ case 'extract': {
 
 case 'ask_user': {
   const result: ActionResult = {
-    outcome: 'advanced',
+    outcome: 'no_change',
+    detail: 'awaiting user interaction',
     question: action.question,
   };
 

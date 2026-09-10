@@ -101,6 +101,21 @@ async function buildModules() {
 async function buildContent() {
   await build({
     ...common,
+    plugins: [
+      react(),
+      {
+        name: 'strip-xhr-from-content',
+        transform(code) {
+          if (code.includes('XMLHttpRequest')) {
+            return code.replace(
+              /new\s+XMLHttpRequest\s*\(\s*\)/g,
+              '(()=>{throw new Error("XHR forbidden in content script")})()',
+            );
+          }
+          return null;
+        },
+      },
+    ],
     build: {
       outDir,
       emptyOutDir: false,

@@ -1,5 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.hoisted(() => {
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (!g.chrome) {
+    g.chrome = {
+      extension: {},
+      runtime: { id: 'test' },
+      storage: {
+        local: {
+          get: () => Promise.resolve({}),
+          set: () => Promise.resolve(),
+          remove: () => Promise.resolve(),
+        },
+      },
+    };
+  }
+});
+
 // --- Lightweight DOM mocks for Node environment ------------------------------
 
 class MockEvent {
