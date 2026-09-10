@@ -299,9 +299,9 @@ export interface ExtractOptions {
    * destroy the vault of a task that is mid-flight, or repoint the element ids the
    * executor is about to resolve.
    */
-  ephemeral?: boolean;
-  autoFillPrefilled?: boolean;
-  userAnswers?: Record<string, string>;
+  ephemeral?: boolean | undefined;
+  autoFillPrefilled?: boolean | undefined;
+  userAnswers?: Record<string, string> | undefined;
 }
 
 export interface ExtractOutput {

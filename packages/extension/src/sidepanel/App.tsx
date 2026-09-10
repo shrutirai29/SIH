@@ -154,7 +154,7 @@ export function App(): React.JSX.Element {
       void refreshTabs();
     };
 
-    const handleUpdated = (tabId: number, changeInfo: { status?: string }) => {
+    const handleUpdated = (_tabId: number, changeInfo: { status?: string }) => {
       if (changeInfo.status === 'complete') {
         void refreshTabs();
       }

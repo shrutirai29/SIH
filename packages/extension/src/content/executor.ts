@@ -1,6 +1,5 @@
 import type { Action, Risk, Target } from '@prahari/ssg';
 import { isToken } from '@prahari/ssg';
-import { containsPii } from '@prahari/kavach/detectors';
 import type { SinkViolation } from '@prahari/kavach';
 import type { ActionResult } from '../shared/messages.js';
 import { elementRegistry } from './extract.js';
@@ -90,7 +89,9 @@ function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
     const parts = value.trim().split(/[\s/-]+/);
     if (parts.length === 3) {
       const [p1, p2, p3] = parts;
-      valToSet = p3.length === 4 ? `${p3}-${p2.padStart(2, '0')}-${p1.padStart(2, '0')}` : `${p1}-${p2.padStart(2, '0')}-${p3.padStart(2, '0')}`;
+      if (p1 !== undefined && p2 !== undefined && p3 !== undefined) {
+        valToSet = p3.length === 4 ? `${p3}-${p2.padStart(2, '0')}-${p1.padStart(2, '0')}` : `${p1}-${p2.padStart(2, '0')}-${p3.padStart(2, '0')}`;
+      }
     }
   }
 

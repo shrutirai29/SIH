@@ -153,9 +153,9 @@ export class AgentLoop {
   async start(
     goal: string,
     opts?: {
-      autoFillPrefilled?: boolean;
-      userProfile?: UserProfile;
-      savedFields?: Record<string, string>;
+      autoFillPrefilled?: boolean | undefined;
+      userProfile?: UserProfile | undefined;
+      savedFields?: Record<string, string> | undefined;
     },
   ): Promise<AgentState> {
     if (this.#abort !== null) this.stop('Restarting.');

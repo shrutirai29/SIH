@@ -76,9 +76,9 @@ export class AgentManager {
     tabId: number,
     goal: string,
     opts?: {
-      autoFillPrefilled?: boolean;
-      userProfile?: UserProfile;
-      savedFields?: Record<string, string>;
+      autoFillPrefilled?: boolean | undefined;
+      userProfile?: UserProfile | undefined;
+      savedFields?: Record<string, string> | undefined;
     },
   ): Promise<AgentState> {
     const existing = this.#loops.get(tabId);

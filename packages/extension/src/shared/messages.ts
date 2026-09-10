@@ -19,7 +19,8 @@ export interface StartTask {
   /** The tab the task should run on. Required when sent from the side panel. */
   tabId: number;
   /** When true, the agent may use saved profile data to fill known fields. */
-  autoFillPrefilled?: boolean;
+  autoFillPrefilled?: boolean | undefined;
+  userProfile?: unknown;
 }
 
 /** Side panel sends this when the user has answered a clarifying question. */
@@ -87,9 +88,9 @@ export interface ExtractScreen {
   step: number;
   traceId: string;
   sessionId: string;
-  autoFillPrefilled?: boolean;
+  autoFillPrefilled?: boolean | undefined;
   userProfile?: unknown;
-  userAnswers?: Record<string, string>;
+  userAnswers?: Record<string, string> | undefined;
 }
 export interface ExecuteAction {
   kind: 'EXECUTE_ACTION';
@@ -116,6 +117,13 @@ export interface ToggleMascot {
 export interface SetMascotVisible {
   kind: 'SET_MASCOT_VISIBLE';
   visible: boolean;
+}
+
+export interface SetMascotTheme {
+  kind: 'SET_MASCOT_THEME';
+  themeIndex?: number | undefined;
+  themeName?: string | undefined;
+  tabNumber?: number | undefined;
 }
 
 /**
@@ -165,6 +173,7 @@ export type Request =
   | DetectFaces
   | ToggleMascot
   | SetMascotVisible
+  | SetMascotTheme
   | TaskNotify
   | FocusTab
   | AnswerQuestion
@@ -192,7 +201,7 @@ export interface AgentQuestion {
   /** Human-readable question shown to the user. */
   question: string;
   /** Optional hint labels for quick-pick buttons. */
-  options?: string[];
+  options?: string[] | undefined;
 }
 
 export interface AgentState {
@@ -202,10 +211,10 @@ export interface AgentState {
   /** The browser tab this task is bound to. */
   tabId: number;
   /** Sequential human-friendly tab number (1, 2, 3...). */
-  tabNumber?: number;
+  tabNumber?: number | undefined;
   goal: string;
   /** Set when phase === 'asking'. The agent is waiting for a user answer. */
-  pendingQuestion?: AgentQuestion;
+  pendingQuestion?: AgentQuestion | undefined;
   step: number;
   tier: 0 | 1 | 2;
   /** Human-readable line for the status area. Never contains page values. */

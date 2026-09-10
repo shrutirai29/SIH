@@ -31,9 +31,7 @@ export class TaskProgressWidget {
       phase: 'idle',
       goal: '',
       step: 0,
-      maxSteps: 10,
       redactionCount: 0,
-      isMultiTabActive: false,
     });
     this.render();
   }
@@ -49,7 +47,7 @@ export class TaskProgressWidget {
     this.render();
   }
 
-  private syncTasksFromAgentState(state: AgentState): void {
+  private syncTasksFromAgentState(state: Partial<AgentState>): void {
     const taskList: MascotTaskItem[] = [];
 
     taskList.push({
@@ -280,15 +278,16 @@ export class TaskProgressWidget {
       const tabId = this.currentState?.tabId;
 
       // Update state locally immediately so HUD UI flips to active working phase instantly
-      this.updateState({
-        phase: 'observing',
-        goal: val,
-        step: 0,
-        maxSteps: 10,
-        redactionCount: this.currentState?.redactionCount ?? 0,
-        isMultiTabActive: false,
-        message: 'Starting task...',
-      });
+      if (this.currentState) {
+        this.updateState({
+          ...this.currentState,
+          phase: 'observing',
+          goal: val,
+          step: 0,
+          redactionCount: this.currentState.redactionCount ?? 0,
+          message: 'Starting task...',
+        });
+      }
 
       browser.runtime
         .sendMessage({
