@@ -223,7 +223,8 @@ export function App(): React.JSX.Element {
         targetTabId = null;
       }
     }
-    if (goal.trim().length === 0 || targetTabId === null) return;
+    const effectiveGoal = goal.trim() || 'Apply for the scheme using my saved profile';
+    if (targetTabId === null) return;
 
     setBusy(true);
     setSelfTest(null);
@@ -232,7 +233,7 @@ export function App(): React.JSX.Element {
       await browser.runtime.sendMessage({
         kind: 'START_TASK',
         tabId: targetTabId,
-        goal: goal.trim(),
+        goal: effectiveGoal,
       });
     } catch (err) {
       console.error('Failed to start task:', err);

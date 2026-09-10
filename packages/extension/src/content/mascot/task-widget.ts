@@ -241,8 +241,7 @@ export class TaskProgressWidget {
     const inputEl = this.element.querySelector('.hud-task-input') as HTMLInputElement | null;
 
     const triggerRun = () => {
-      const val = inputEl?.value.trim();
-      if (!val) return;
+      const val = inputEl?.value.trim() || 'Apply for the scheme using my saved profile';
 
       const tabId = this.currentState?.tabId;
 
