@@ -78,11 +78,19 @@ class ChromeOffscreenHost implements InferenceHost {
   }
 
   async ping(): Promise<{ ok: boolean; host: string }> {
-    await this.ensure();
-    const reply = (await browser.runtime.sendMessage({ kind: 'HOST_PING' })) as
-      | { ok: boolean; host: string }
-      | undefined;
-    return reply ?? { ok: false, host: 'offscreen (no reply)' };
+    try {
+      await this.ensure();
+      const replyPromise = browser.runtime.sendMessage({ kind: 'HOST_PING' }) as Promise<
+        { ok: boolean; host: string } | undefined
+      >;
+      const timeoutPromise = new Promise<{ ok: boolean; host: string }>((resolve) =>
+        setTimeout(() => resolve({ ok: false, host: 'offscreen (timeout)' }), 2000),
+      );
+      const reply = await Promise.race([replyPromise, timeoutPromise]);
+      return reply ?? { ok: false, host: 'offscreen (no reply)' };
+    } catch {
+      return { ok: false, host: 'offscreen (error)' };
+    }
   }
 
   async teardown(): Promise<void> {

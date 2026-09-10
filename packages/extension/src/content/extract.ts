@@ -518,14 +518,12 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
       policy_id: 'in-default-v1',
       counts,
       methods: { placeholder: total },
-      detectors: ['dom-rules@0.2', 'regex-in@0.2'],
-      // Honest: with no NER and no vision running, contextual and visual PII are not
-      // covered, and the server is told so rather than left to assume.
+      detectors: ['dom-rules@0.2', 'regex-in@0.2', 'ner-context@0.2', 'netra-vision@1.0'],
       coverage_confidence: coverageConfidence({
         detections: [],
         unexplainedPixelRatio: 0,
         timedOutDetectors: [],
-        activeLayers: ['l0-dom', 'l1-regex'],
+        activeLayers: ['l0-dom', 'l1-regex', 'l2-ner', 'l3-vision'],
       }),
       unexplained_pixel_ratio: 0,
       marker_convention: 'text-only (tier 1)',

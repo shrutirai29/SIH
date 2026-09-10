@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.llm.client import DecodeMode, LlmClient, LlmConfig, LlmError, extract_json
-from app.main import app
+from app.main import app, llm
 
 client = TestClient(app)
 
@@ -131,9 +131,14 @@ def test_ingress_guard_catches_pii_anywhere_in_the_payload() -> None:
 def test_a_clean_payload_reaches_the_model_stage() -> None:
     # With no key configured that stage answers 503 — which is itself the proof that
     # the guards let a clean payload through rather than refusing everything.
-    r = client.post("/v1/agent/step", json=ssg())
-    assert r.status_code == 503
-    assert r.json()["error"] == "MODEL_UNAVAILABLE"
+    orig_key = llm.config.api_key
+    try:
+        llm.config.api_key = ""
+        r = client.post("/v1/agent/step", json=ssg())
+        assert r.status_code == 503
+        assert r.json()["error"] == "MODEL_UNAVAILABLE"
+    finally:
+        llm.config.api_key = orig_key
 
 
 # ------------------------------------------------------- decode + retry tiers

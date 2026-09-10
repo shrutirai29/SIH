@@ -21,7 +21,13 @@ import {
   type PixelRegion,
 } from '@prahari/kavach';
 import { findTokens, type SSG } from '@prahari/ssg';
+import type { Box } from '@prahari/netra';
 import type { CapturedTab } from './capture.js';
+
+export interface VisualRedactOptions extends Partial<PixelRedactOptions> {
+  readonly detectedFaces?: readonly Box[] | undefined;
+  readonly detectFaces?: ((img: ImageData) => Promise<Box[]> | Box[]) | undefined;
+}
 
 export interface RedactedScreenshot {
   /** The verified redacted PNG blob. */
@@ -110,6 +116,14 @@ export function derivePiiPixelRegions(
 
     if (el.redaction?.class) {
       piiElements.set(el.id, el.redaction.class);
+      continue;
+    }
+
+    // Camera Stream Rule (PIPELINE.md sec 4.1): unconditional blackout of live video/camera elements
+    const isVideo = el.tag === 'video' || el.role === 'video' ||
+      (typeof el.name === 'string' && /camera|webcam|live\s*video|stream/i.test(el.name));
+    if (isVideo) {
+      piiElements.set(el.id, 'CAMERA_STREAM');
       continue;
     }
 
@@ -241,7 +255,7 @@ export async function redactCapturedTab(
   captured: CapturedTab,
   ssg: SSG,
   diff?: readonly DiffRow[],
-  options: Partial<PixelRedactOptions> = {},
+  options: VisualRedactOptions = {},
 ): Promise<RedactedScreenshot | null> {
   try {
     if (!captured || !captured.blob || captured.width <= 0 || captured.height <= 0) {
@@ -253,7 +267,50 @@ export async function redactCapturedTab(
       return null;
     }
 
-    const redactResult = await redactPixels(captured.blob, derivation.regions, {
+    const finalRegions: PixelRegion[] = [...derivation.regions];
+
+    // NETRA on-device face detection integration (PIPELINE.md sec 4.1)
+    if (options.detectedFaces && options.detectedFaces.length > 0) {
+      for (let i = 0; i < options.detectedFaces.length; i++) {
+        const [fx, fy, fw, fh] = options.detectedFaces[i]!;
+        finalRegions.push({
+          elementId: `face_${i}`,
+          cls: 'FACE',
+          x: Math.round(fx),
+          y: Math.round(fy),
+          width: Math.round(fw),
+          height: Math.round(fh),
+        });
+      }
+    }
+
+    if (options.detectFaces && typeof OffscreenCanvas !== 'undefined') {
+      try {
+        const bitmap = await createImageBitmap(captured.blob);
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(bitmap, 0, 0);
+          const imgData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+          const faces = await options.detectFaces(imgData);
+          for (let i = 0; i < faces.length; i++) {
+            const [fx, fy, fw, fh] = faces[i]!;
+            finalRegions.push({
+              elementId: `face_${i}`,
+              cls: 'FACE',
+              x: Math.round(fx),
+              y: Math.round(fy),
+              width: Math.round(fw),
+              height: Math.round(fh),
+            });
+          }
+        }
+      } catch {
+        // Fallback: continue with derived regions
+      }
+    }
+
+    const redactResult = await redactPixels(captured.blob, finalRegions, {
       mode: 'BLACKOUT',
       ...options,
     });
@@ -268,7 +325,7 @@ export async function redactCapturedTab(
     }
 
     // Verify structural validity of the redacted image with KAVACH
-    const verifyResult = await verifyRedactedImage(redactResult.blob, derivation.regions.length);
+    const verifyResult = await verifyRedactedImage(redactResult.blob, finalRegions.length);
     if (!verifyResult.ok) {
       return null;
     }

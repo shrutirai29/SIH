@@ -471,5 +471,84 @@ describe('Visual Redaction Contract & Coordinate Pipeline (Phase 2)', () => {
       warnSpy.mockRestore();
       errorSpy.mockRestore();
     });
+
+    it('10. NETRA detected faces are included in pixel redaction and verified', async () => {
+      const W = 100;
+      const H = 100;
+      const pixelBuffer = new Uint8ClampedArray(W * H * 4);
+      pixelBuffer.fill(255);
+
+      class MockCanvas {
+        readonly width = W;
+        readonly height = H;
+        getContext(type: string) {
+          if (type !== '2d') return null;
+          return {
+            fillStyle: '#000000',
+            font: '14px monospace',
+            textAlign: 'center',
+            textBaseline: 'middle',
+            drawImage: vi.fn(),
+            fillText: vi.fn(),
+            fillRect: vi.fn(),
+            getImageData: (x: number, y: number, w: number, h: number) => {
+              const data = new Uint8ClampedArray(w * h * 4);
+              return { data, width: w, height: h };
+            },
+            putImageData: vi.fn(),
+          };
+        }
+        async convertToBlob() {
+          return makeTestPng(W, H);
+        }
+      }
+
+      vi.stubGlobal('OffscreenCanvas', MockCanvas);
+      vi.stubGlobal('createImageBitmap', async () => ({
+        width: W,
+        height: H,
+        close: vi.fn(),
+      }));
+
+      const ssg = makeMockSsg({
+        viewport: { w: 100, h: 100, dpr: 1, scroll_y: 0, doc_h: 100 },
+      });
+      const captured: CapturedTab = {
+        dataUrl: 'data:image/png;base64,dummy',
+        blob: makeTestPng(W, H),
+        width: W,
+        height: H,
+      };
+
+      // Detected face at [20, 20, 40, 40]
+      const result = await redactCapturedTab(captured, ssg, undefined, {
+        detectedFaces: [[20, 20, 40, 40]],
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.redactedCount).toBe(1);
+
+      vi.unstubAllGlobals();
+    });
+
+    it('11. Camera stream / video elements receive unconditional blackout', () => {
+      const ssg = makeMockSsg({
+        elements: [
+          {
+            id: 'video_cam_1',
+            tag: 'video',
+            role: 'video',
+            name: 'Live Webcam Stream',
+            bbox: [50, 50, 320, 240],
+          },
+        ],
+      });
+
+      const derivation = derivePiiPixelRegions(ssg, { width: 1000, height: 800 });
+      expect(derivation.ok).toBe(true);
+      const camRegion = derivation.regions.find((r) => r.elementId === 'video_cam_1');
+      expect(camRegion).toBeDefined();
+      expect(camRegion!.cls).toBe('CAMERA_STREAM');
+    });
   });
 });

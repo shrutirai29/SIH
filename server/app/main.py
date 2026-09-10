@@ -104,6 +104,24 @@ async def models() -> dict[str, Any]:
     }
 
 
+@app.get("/demo")
+async def demo_portal() -> Response:
+    """Serves the test government portal locally over standard HTTP.
+
+    This avoids Chrome file:// scheme restrictions on unpacked extensions.
+    """
+    portal_file = (
+        Path(__file__).resolve().parents[2]
+        / "packages"
+        / "eval"
+        / "fixtures"
+        / "demo-portal.html"
+    )
+    if not portal_file.exists():
+        return JSONResponse({"error": "PORTAL_NOT_FOUND"}, status_code=404)
+    return Response(content=portal_file.read_bytes(), media_type="text/html")
+
+
 @app.get("/v1/metrics")
 async def metrics() -> dict[str, Any]:
     total = _stats["plans"] or 1

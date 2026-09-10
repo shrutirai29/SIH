@@ -70,6 +70,7 @@ export class AgentLoop {
   #state: AgentState = freshState();
   #abort: AbortController | null = null;
   #listeners = new Set<(s: AgentState) => void>();
+  #pinnedTabId: number | null = null;
 
   readonly ledger: Ledger;
   /** Exact bytes of recent steps, memory only, for the diff viewer (ticket D16). */
@@ -109,13 +110,15 @@ export class AgentLoop {
   stop(reason = 'Stopped by user.'): void {
     this.#abort?.abort();
     this.#abort = null;
+    this.#pinnedTabId = null;
     // ARCHITECTURE.md sec 10: the kept artefacts are dropped at session end.
     this.transmissions.clear();
     this.#patch({ phase: 'idle', message: reason });
   }
 
-async start(goal: string): Promise<AgentState> {
-  if (this.#abort !== null) this.stop('Restarting.');
+  async start(goal: string, tabId?: number): Promise<AgentState> {
+    if (this.#abort !== null) this.stop('Restarting.');
+    this.#pinnedTabId = tabId ?? null;
 
   // Start a fresh session. Remove temporary payload data
   // from the previous session.
@@ -184,10 +187,20 @@ async start(goal: string): Promise<AgentState> {
         needVisual = false;
         this.#patch({ tier: 2, message: 'Capturing and redacting visual evidence requested by planner…' });
 
+        const tabId = await this.#activeTabId();
+        let targetWindowId: number | undefined;
+        try {
+          const tab = await browser.tabs.get(tabId);
+          targetWindowId = tab?.windowId;
+        } catch {
+          targetWindowId = undefined;
+        }
+
         let captured: CapturedTab | null = null;
         try {
-          captured = await captureActiveTab();
-        } catch {
+          captured = await captureActiveTab(targetWindowId !== undefined ? { windowId: targetWindowId } : {});
+        } catch (err) {
+          console.warn('[PRAHARI Capture] captureActiveTab failed:', err);
           captured = null;
         }
 
@@ -397,10 +410,22 @@ async start(goal: string): Promise<AgentState> {
   }
 
   async #activeTabId(): Promise<number> {
+    if (this.#pinnedTabId !== null) {
+      try {
+        const tab = await browser.tabs.get(this.#pinnedTabId);
+        if (tab?.id !== undefined) return tab.id;
+      } catch {
+        this.#pinnedTabId = null;
+      }
+    }
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     const id = tab?.id;
-    if (id === undefined) throw new Error('no active tab');
-    return id;
+    if (id !== undefined) return id;
+
+    const [anyActiveTab] = await browser.tabs.query({ active: true });
+    if (anyActiveTab?.id !== undefined) return anyActiveTab.id;
+
+    throw new Error('no active tab');
   }
 
   async #extract(goal: string, step: number, traceId: string, sessionId: string): Promise<ExtractResult> {
