@@ -131,14 +131,28 @@ export function App(): React.JSX.Element {
 
       // Default selectedTabId to the currently active tab if not set or invalid
       if (filtered.length > 0) {
-        const [active] = await browser.tabs.query({ active: true, currentWindow: true });
-        if (active?.id !== undefined && filtered.some((f) => f.id === active.id)) {
-          setSelectedTabId((prev) => (prev !== null && filtered.some((f) => f.id === prev) ? prev : active.id!));
-        } else {
-          const firstId = filtered[0]?.id;
-          if (firstId !== undefined) {
-            setSelectedTabId((prev) => (prev !== null && filtered.some((f) => f.id === prev) ? prev : firstId));
+        let activeTabId: number | undefined;
+        try {
+          const [active] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
+          if (active?.id !== undefined && filtered.some((f) => f.id === active.id)) {
+            activeTabId = active.id;
           }
+        } catch {
+          // ignore
+        }
+        if (activeTabId === undefined) {
+          try {
+            const [active] = await browser.tabs.query({ active: true, currentWindow: true });
+            if (active?.id !== undefined && filtered.some((f) => f.id === active.id)) {
+              activeTabId = active.id;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        const candidateId = activeTabId ?? filtered[0]?.id;
+        if (candidateId !== undefined) {
+          setSelectedTabId((prev) => (prev !== null && filtered.some((f) => f.id === prev) ? prev : candidateId));
         }
       }
     } catch (err) {
@@ -150,7 +164,22 @@ export function App(): React.JSX.Element {
     void refreshTabs();
 
     const handleActivated = (activeInfo: { tabId: number }) => {
-      setSelectedTabId(activeInfo.tabId);
+      browser.tabs
+        .get(activeInfo.tabId)
+        .then((tab) => {
+          const u = tab?.url || '';
+          if (
+            tab?.id !== undefined &&
+            !u.startsWith('chrome://') &&
+            !u.startsWith('chrome-extension://') &&
+            !u.startsWith('edge://') &&
+            !u.startsWith('about:') &&
+            !u.startsWith('moz-extension://')
+          ) {
+            setSelectedTabId(tab.id);
+          }
+        })
+        .catch(() => {});
       void refreshTabs();
     };
 
@@ -160,12 +189,18 @@ export function App(): React.JSX.Element {
       }
     };
 
+    const handleCreated = () => {
+      void refreshTabs();
+    };
+
     browser.tabs.onActivated.addListener(handleActivated);
     browser.tabs.onUpdated.addListener(handleUpdated);
+    browser.tabs.onCreated.addListener(handleCreated);
 
     return () => {
       browser.tabs.onActivated.removeListener(handleActivated);
       browser.tabs.onUpdated.removeListener(handleUpdated);
+      browser.tabs.onCreated.removeListener(handleCreated);
     };
   }, [refreshTabs]);
 
@@ -223,7 +258,38 @@ export function App(): React.JSX.Element {
   }, [mainTab, currentState?.step, refreshLedger]);
 
   const start = async (): Promise<void> => {
-    if (goal.trim().length === 0 || selectedTabId === null) return;
+    const currentGoal =
+      goal.trim() ||
+      (document.querySelector('textarea') as HTMLTextAreaElement | null)?.value?.trim() ||
+      '';
+    if (currentGoal.length === 0) return;
+
+    let targetTabId = selectedTabId;
+    const isTargetValid = availableTabs.some((t) => t.id === targetTabId);
+    if (!isTargetValid) {
+      targetTabId = availableTabs[0]?.id ?? null;
+      if (targetTabId === null) {
+        try {
+          const allTabs = await browser.tabs.query({});
+          const isWeb = (u?: string) =>
+            Boolean(
+              u &&
+                !u.startsWith('chrome://') &&
+                !u.startsWith('chrome-extension://') &&
+                !u.startsWith('edge://') &&
+                !u.startsWith('about:') &&
+                !u.startsWith('moz-extension://'),
+            );
+          const candidate = allTabs.find((t) => isWeb(t.url));
+          targetTabId = candidate?.id ?? null;
+        } catch {
+          // ignore
+        }
+      }
+      if (targetTabId !== null) {
+        setSelectedTabId(targetTabId);
+      }
+    }
 
     setBusy(true);
     setSelfTest(null);
@@ -231,8 +297,8 @@ export function App(): React.JSX.Element {
     try {
       await browser.runtime.sendMessage({
         kind: 'START_TASK',
-        tabId: selectedTabId,
-        goal: goal.trim(),
+        tabId: targetTabId ?? undefined,
+        goal: currentGoal,
         autoFillPrefilled,
         userProfile,
       });
@@ -597,9 +663,9 @@ export function App(): React.JSX.Element {
             <button
               className="primary"
               onClick={() => void start()}
-              disabled={running || busy || selectedTabId === null}
+              disabled={running || busy}
             >
-              Run on Selected Tab
+              Run
             </button>
 
             <button
@@ -897,6 +963,13 @@ function LedgerView({
 }): React.JSX.Element {
   return (
     <main className="pane ledger-pane">
+      <section className="card">
+        <h2>Privacy ledger (LEKHA)</h2>
+        <p className="muted">
+          Tamper-evident local record of agent activity. Sensitive values are not stored.
+        </p>
+      </section>
+
       <div className="row">
         <button onClick={onRefresh}>↻ Refresh</button>
         <span className="grow" />
@@ -920,9 +993,9 @@ function LedgerView({
                 <button
                   className="diff-btn"
                   onClick={() => onInspect(entry.trace_id)}
-                  title="Inspect what the server saw"
+                  title="What the server saw"
                 >
-                  Inspect Diff →
+                  What the server saw →
                 </button>
               </div>
               <div className="lbody">

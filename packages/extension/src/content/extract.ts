@@ -492,28 +492,29 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
   // closed — and the user saw `PII_DETECTED` with nothing connecting it to what they
   // had typed. Redacting it turns a dead end into the feature working: the planner
   // gets `⟦AADHAAR_1⟧` and can ask for it back by reference.
-  const profile = await getStoredProfile();
-  const savedFields = await getSavedFields();
-  const allAnswers = { ...savedFields, ...(opts.userAnswers || {}) };
-
   let augmentedGoal = opts.goal;
-  const pDetails: string[] = [];
-  if (profile) {
-    if (profile.fullName) pDetails.push(`name ${profile.fullName}`);
-    if (profile.enrollmentNo) pDetails.push(`roll ${profile.enrollmentNo}`);
-    if (profile.phone) pDetails.push(`mobile ${profile.phone}`);
-    if (profile.email) pDetails.push(`email ${profile.email}`);
-    if (profile.dob) pDetails.push(`date ${profile.dob}`);
-  }
-
-  for (const [key, val] of Object.entries(allAnswers)) {
-    if (typeof val === 'string' && val.trim().length > 0) {
-      pDetails.push(`${key} ${val.trim()}`);
+  if (opts.autoFillPrefilled) {
+    const profile = await getStoredProfile();
+    const savedFields = await getSavedFields();
+    const allAnswers = { ...savedFields, ...(opts.userAnswers || {}) };
+    const pDetails: string[] = [];
+    if (profile) {
+      if (profile.fullName) pDetails.push(`name ${profile.fullName}`);
+      if (profile.enrollmentNo) pDetails.push(`roll ${profile.enrollmentNo}`);
+      if (profile.phone) pDetails.push(`mobile ${profile.phone}`);
+      if (profile.email) pDetails.push(`email ${profile.email}`);
+      if (profile.dob) pDetails.push(`date ${profile.dob}`);
     }
-  }
 
-  if (pDetails.length > 0) {
-    augmentedGoal = `${opts.goal} [SavedProfile: ${pDetails.join(', ')}]`;
+    for (const [key, val] of Object.entries(allAnswers)) {
+      if (typeof val === 'string' && val.trim().length > 0) {
+        pDetails.push(`${key} ${val.trim()}`);
+      }
+    }
+
+    if (pDetails.length > 0) {
+      augmentedGoal = `${opts.goal} [SavedProfile: ${pDetails.join(', ')}]`;
+    }
   }
 
   const goal = await redactText(augmentedGoal.slice(0, 768), {
@@ -534,7 +535,7 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
   // of whatever the payload happened to contain — including a token a hostile page had
   // written into its own text, which was then dutifully declared, and check 6 compared
   // the payload against itself. The vault is the one source no page can reach.
-  const counts = countMintedTokens(session, elements, textBlocks, title.text, goal.text);
+  const counts = countMintedTokens(session, elements, textBlocks, title.text);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   void allCounts;
 
@@ -616,7 +617,6 @@ function countMintedTokens(
   elements: readonly SsgElement[],
   textBlocks: NonNullable<SSG['text_blocks']>,
   title: string,
-  goal?: string,
 ): Record<string, number> {
   const counts: Record<string, number> = {};
   const seen = new Set<string>();
@@ -645,7 +645,6 @@ function countMintedTokens(
   }
   for (const b of textBlocks) scan(b.text);
   scan(title);
-  scan(goal);
 
   return counts;
 }

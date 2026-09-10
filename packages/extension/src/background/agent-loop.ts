@@ -615,8 +615,6 @@ export class AgentLoop {
   }
 
   async #activeTabId(): Promise<number> {
-    if (this.#tabId !== undefined) return this.#tabId;
-
     const isNonWeb = (t?: { id?: number; url?: string }): boolean => {
       if (!t || t.id === undefined) return true;
       if (!t.url) return false;
@@ -630,10 +628,22 @@ export class AgentLoop {
       );
     };
 
+    if (this.#tabId !== undefined && this.#tabId > 0) {
+      try {
+        const tab = await browser.tabs.get(this.#tabId);
+        if (!isNonWeb(tab)) return this.#tabId;
+      } catch {
+        // ignore
+      }
+    }
+
     // 1. Current window active tab (fast path for normal extension usage)
     try {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id !== undefined && !isNonWeb(tab)) return tab.id;
+      if (tab?.id !== undefined && !isNonWeb(tab)) {
+        this.#tabId = tab.id;
+        return tab.id;
+      }
     } catch {
       // ignore
     }
@@ -642,7 +652,10 @@ export class AgentLoop {
     try {
       const activeTabs = await browser.tabs.query({ active: true });
       const webActive = activeTabs.find((t) => !isNonWeb(t));
-      if (webActive?.id !== undefined) return webActive.id;
+      if (webActive?.id !== undefined) {
+        this.#tabId = webActive.id;
+        return webActive.id;
+      }
     } catch {
       // ignore
     }
@@ -651,7 +664,10 @@ export class AgentLoop {
     try {
       const allTabs = await browser.tabs.query({});
       const webTab = allTabs.find((t) => !isNonWeb(t));
-      if (webTab?.id !== undefined) return webTab.id;
+      if (webTab?.id !== undefined) {
+        this.#tabId = webTab.id;
+        return webTab.id;
+      }
     } catch {
       // ignore
     }
@@ -779,9 +795,7 @@ export class AgentLoop {
    */
   async canaryAudit(): Promise<CanaryAuditResult> {
     const tabId = await this.#activeTabId();
-    const report = (await browser.tabs.sendMessage(tabId, {
-      kind: 'RUN_CANARY_AUDIT',
-    })) as {
+    let report: {
       total: number;
       observed: number;
       leaked: number;
@@ -798,7 +812,34 @@ export class AgentLoop {
       values: string[];
       payload: string;
       ranAt: number;
-    };
+    } | undefined;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        report = (await browser.tabs.sendMessage(tabId, {
+          kind: 'RUN_CANARY_AUDIT',
+        })) as typeof report;
+        if (report !== undefined) break;
+      } catch {
+        if (attempt === 0 && browser.scripting?.executeScript) {
+          try {
+            await browser.scripting.executeScript({
+              target: { tabId },
+              files: ['content.js'],
+            });
+            await sleep(200);
+          } catch {
+            // ignore
+          }
+        } else {
+          await sleep(100);
+        }
+      }
+    }
+
+    if (!report) {
+      throw new Error('Could not run canary audit: content script not responding on tab ' + tabId);
+    }
 
     const guard = createEgressGuard({
       serverOrigin: CONFIG.serverOrigin,
