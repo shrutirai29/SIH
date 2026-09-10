@@ -156,10 +156,53 @@ manager.onStateChange(async (tabId, state) => {
 
 async function getEffectiveTabId(msgTabId?: number, senderTabId?: number): Promise<number | undefined> {
   if (typeof msgTabId === 'number') return msgTabId;
-  if (typeof senderTabId === 'number') return senderTabId;
+  if (typeof senderTabId === 'number') {
+    try {
+      const senderTab = await browser.tabs.get(senderTabId);
+      const url = senderTab?.url || '';
+      if (
+        !url.startsWith('chrome://') &&
+        !url.startsWith('chrome-extension://') &&
+        !url.startsWith('about:') &&
+        !url.startsWith('edge://') &&
+        !url.startsWith('moz-extension://')
+      ) {
+        return senderTabId;
+      }
+    } catch {
+      // Ignore tab get errors
+    }
+  }
   try {
-    const [active] = await browser.tabs.query({ active: true, currentWindow: true });
-    return active?.id;
+    const activeTabs = await browser.tabs.query({ active: true, currentWindow: true });
+    for (const t of activeTabs) {
+      if (t.id === undefined) continue;
+      const u = t.url || '';
+      if (
+        !u.startsWith('chrome://') &&
+        !u.startsWith('chrome-extension://') &&
+        !u.startsWith('about:') &&
+        !u.startsWith('edge://') &&
+        !u.startsWith('moz-extension://')
+      ) {
+        return t.id;
+      }
+    }
+    const allTabs = await browser.tabs.query({});
+    for (const t of allTabs) {
+      if (t.id === undefined) continue;
+      const u = t.url || '';
+      if (
+        !u.startsWith('chrome://') &&
+        !u.startsWith('chrome-extension://') &&
+        !u.startsWith('about:') &&
+        !u.startsWith('edge://') &&
+        !u.startsWith('moz-extension://')
+      ) {
+        return t.id;
+      }
+    }
+    return undefined;
   } catch {
     return undefined;
   }
