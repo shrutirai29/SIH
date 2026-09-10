@@ -343,11 +343,18 @@ function heuristicDynamicPlan(ssg) {
     const isCb = el.role === 'checkbox' || (el.tag === 'input' && el.type === 'checkbox') || /agree|terms|policy|consent|accept|confirm/i.test(raw);
 
     if (isRadio) {
-      const groupName = el.group || el.name || el.ariaLabel || 'radio_group_1';
+      const fullName = el.name || el.ariaLabel || '';
+      let groupName = 'radio_group_1';
+      let optionLabel = fullName;
+      if (fullName.includes(':')) {
+        const parts = fullName.split(':');
+        groupName = parts[0].trim();
+        optionLabel = parts.slice(1).join(':').trim();
+      }
       if (!radioGroups.has(groupName)) {
         radioGroups.set(groupName, []);
       }
-      radioGroups.get(groupName).push(el);
+      radioGroups.get(groupName).push({ el, optionLabel });
     } else if (isCb) {
       checkboxes.push(el);
     }
@@ -454,21 +461,21 @@ function heuristicDynamicPlan(ssg) {
 
     // Handle Radio button groups: match prompt preference, or inquire user if unspecified
     const unaskedRadioQuestions = [];
-    for (const [groupName, options] of radioGroups.entries()) {
-      if (options.length === 0) continue;
+    for (const [groupName, itemOpts] of radioGroups.entries()) {
+      if (itemOpts.length === 0) continue;
 
-      const matched = options.find((opt) => {
-        const optText = `${opt.name || ''} ${opt.ariaLabel || ''} ${opt.placeholder || ''} ${opt.id || ''}`.toLowerCase();
-        return optText.length > 0 && goal.toLowerCase().includes(optText);
+      const matchedItem = itemOpts.find(({ el, optionLabel }) => {
+        const text = `${optionLabel} ${el.name || ''} ${el.ariaLabel || ''}`.toLowerCase();
+        return text.length > 0 && goal.toLowerCase().includes(text);
       });
 
-      if (matched) {
+      if (matchedItem) {
         if (actions.length < 5) {
-          actions.push({ op: 'click', target: matched.id, risk: 'safe' });
+          actions.push({ op: 'click', target: matchedItem.el.id, risk: 'safe' });
         }
       } else {
-        const optionNames = options
-          .map((o) => o.name || o.ariaLabel || o.placeholder || 'Option')
+        const optionNames = itemOpts
+          .map(({ optionLabel }) => optionLabel || 'Option')
           .filter((t, i, arr) => t && arr.indexOf(t) === i);
 
         unaskedRadioQuestions.push({

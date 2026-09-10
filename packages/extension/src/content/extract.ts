@@ -387,7 +387,12 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
       originOrigin: session.origin,
     };
 
-    const rawName = accessibleName(el);
+    let rawName = accessibleName(el);
+    const contextGroup = contextualLabelFor(el);
+    if (contextGroup.length > 0 && !rawName.startsWith(contextGroup)) {
+      rawName = rawName.length > 0 ? `${contextGroup}: ${rawName}` : contextGroup;
+    }
+
     const name = await redactText(rawName, redactOpts);
     allCounts.push(name.counts);
     note(id, name.text, rawName, name.detections, name.text);
@@ -407,11 +412,6 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
     };
 
     if (name.text.length > 0) entry.name = name.text as RedactedText;
-
-    const groupTitle = contextualLabelFor(el);
-    if (groupTitle.length > 0) {
-      (entry as unknown as Record<string, unknown>).group = groupTitle;
-    }
 
     let redacted = name.applied;
 
