@@ -92,9 +92,11 @@ function DiffRowItem({
 
 export function DiffViewer({
   traceId,
+  tabId,
   onClose,
 }: {
   traceId: string;
+  tabId?: number | undefined;
   onClose: () => void;
 }): React.JSX.Element {
   const [view, setView] = useState<
@@ -114,6 +116,7 @@ export function DiffViewer({
           const result = (await browser.runtime.sendMessage({
             kind: 'GET_TRANSMISSION',
             traceId,
+            ...(tabId !== undefined ? { tabId } : {}),
           })) as TransmissionView | null;
 
           if (result !== null) {
@@ -142,7 +145,7 @@ export function DiffViewer({
     return () => {
       cancelled = true;
     };
-  }, [traceId]);
+  }, [traceId, tabId]);
 
   if (view === 'loading') {
     return (

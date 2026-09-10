@@ -20,6 +20,7 @@ import {
 import { CONFIG } from '../shared/config.js';
 import type {
   ActionResult,
+  AgentQuestion,
   AgentState,
   CanaryAuditResult,
   ExtractResult,
@@ -37,10 +38,13 @@ import {
 import { ExtensionLedgerStore } from './ledger-store.js';
 import { TransmissionBuffer } from './transmissions.js';
 import { postStep } from './net.js';
+import type { UserProfile } from '../shared/profile.js';
 
-function freshState(): AgentState {
+function freshState(tabId = 0, taskId = newSessionId()): AgentState {
   return {
     phase: 'idle',
+    taskId,
+    tabId,
     goal: '',
     step: 0,
     tier: 1,
@@ -50,6 +54,7 @@ function freshState(): AgentState {
     redactionCount: 0,
     blockedCount: 0,
     inferenceHost: 'not started',
+    pendingQuestion: undefined,
   };
 }
 
@@ -66,10 +71,14 @@ export interface AgentLoopDeps {
   readonly guard?: EgressGuard;
   readonly host?: InferenceHost;
   readonly store?: ExtensionLedgerStore;
+  readonly tabId?: number;
+  readonly taskId?: string;
 }
 
 export class AgentLoop {
-  #state: AgentState = freshState();
+  #tabId: number | undefined;
+  taskId: string;
+  #state: AgentState;
   #abort: AbortController | null = null;
   #listeners = new Set<(s: AgentState) => void>();
 
@@ -80,7 +89,16 @@ export class AgentLoop {
   readonly #guard: EgressGuard;
   readonly #host: InferenceHost;
 
-  constructor(deps: AgentLoopDeps = {}) {
+  #autoFillPrefilled = false;
+  #userProfile: UserProfile | null = null;
+  #userAnswers: Map<string, string> = new Map();
+  #answerResolve: ((value: string) => void) | null = null;
+
+  constructor(depsOrTabId: AgentLoopDeps | number = {}) {
+    const deps: AgentLoopDeps = typeof depsOrTabId === 'number' ? { tabId: depsOrTabId } : depsOrTabId;
+    this.#tabId = deps.tabId;
+    this.taskId = deps.taskId ?? newSessionId();
+    this.#state = freshState(this.#tabId ?? 0, this.taskId);
     this.#store = deps.store ?? new ExtensionLedgerStore();
     this.ledger = new Ledger(this.#store);
     this.#host = deps.host ?? createInferenceHost();
@@ -111,41 +129,82 @@ export class AgentLoop {
   stop(reason = 'Stopped by user.'): void {
     this.#abort?.abort();
     this.#abort = null;
+    if (this.#answerResolve) {
+      this.#answerResolve('__STOPPED__');
+      this.#answerResolve = null;
+    }
     // ARCHITECTURE.md sec 10: the kept artefacts are dropped at session end.
     this.transmissions.clear();
-    this.#patch({ phase: 'idle', message: reason });
+    this.#patch({ phase: 'idle', message: reason, pendingQuestion: undefined });
   }
 
-  async start(goal: string): Promise<AgentState> {
+  interrupt(reason = 'Page navigated away — task stopped.'): void {
+    this.#abort?.abort();
+    this.#abort = null;
+    if (this.#answerResolve) {
+      this.#answerResolve('__STOPPED__');
+      this.#answerResolve = null;
+    }
+    this.transmissions.clear();
+    this.#patch({ phase: 'interrupted', message: reason, pendingQuestion: undefined });
+  }
+
+  /**
+   * Called when a user provides an answer to a pending question.
+   */
+  provideAnswer(fieldKey: string, value: string): void {
+    this.#userAnswers.set(fieldKey, value);
+    if (this.#answerResolve) {
+      this.#answerResolve(value);
+      this.#answerResolve = null;
+    }
+  }
+
+  async start(
+    goal: string,
+    opts?: {
+      autoFillPrefilled?: boolean | undefined;
+      userProfile?: UserProfile | undefined;
+      savedFields?: Record<string, string> | undefined;
+    },
+  ): Promise<AgentState> {
     if (this.#abort !== null) this.stop('Restarting.');
 
-  // Start a fresh session. Remove temporary payload data
-  // from the previous session.
-  this.transmissions.clear();
+    // Start a fresh session. Remove temporary payload data from the previous session.
+    this.transmissions.clear();
 
-  const controller = new AbortController();
-  this.#abort = controller;
-  const sessionId = newSessionId();
+    const controller = new AbortController();
+    this.#abort = controller;
+    const sessionId = newSessionId();
+    this.taskId = sessionId;
 
-  this.#patch({
-    ...freshState(),
-    phase: 'observing',
-    goal,
-    message: 'Starting.',
-  });
+    this.#autoFillPrefilled = opts?.autoFillPrefilled ?? false;
+    this.#userProfile = opts?.userProfile ?? null;
+    this.#userAnswers.clear();
+    if (opts?.savedFields) {
+      for (const [k, v] of Object.entries(opts.savedFields)) {
+        this.#userAnswers.set(k, v);
+      }
+    }
 
-  // Prove the inference boundary is alive before the first step. In the skeleton it
-  // only pings; from Phase 2 it is where the models live.
-  try {
-    const pong = await this.#host.ping();
-    this.#patch({ inferenceHost: pong.host });
-  } catch (err) {
-    this.#patch({ inferenceHost: 'unavailable: ' + errName(err) });
+    this.#patch({
+      ...freshState(this.#tabId ?? 0, this.taskId),
+      phase: 'observing',
+      goal,
+      message: 'Starting.',
+    });
+
+    // Prove the inference boundary is alive before the first step.
+    try {
+      const pong = await this.#host.ping();
+      this.#patch({ inferenceHost: pong.host });
+    } catch (err) {
+      this.#patch({ inferenceHost: 'unavailable: ' + errName(err) });
+    }
+
+    void this.#run(goal, sessionId, controller.signal);
+    return this.#state;
   }
-
-  void this.#run(goal, sessionId, controller.signal);
-  return this.#state;
-}
 
   #isTerminal(): boolean {
     const p = this.#state.phase;
@@ -167,21 +226,21 @@ export class AgentLoop {
       let extract: ExtractResult;
       try {
         extract = await this.#extract(goal, step, traceId, sessionId);
-} catch (err) {
-  console.error('PRAHARI extraction failed:', err);
+      } catch (err) {
+        console.error('PRAHARI extraction failed:', err);
 
-  const details =
-    err instanceof Error
-      ? `${err.name}: ${err.message}`
-      : String(err);
+        const details =
+          err instanceof Error
+            ? `${err.name}: ${err.message}`
+            : String(err);
 
-  this.#patch({
-    phase: 'error',
-    message: 'Could not read the page: ' + details,
-  });
+        this.#patch({
+          phase: 'error',
+          message: 'Could not read the page: ' + details,
+        });
 
-  return;
-}
+        return;
+      }
       if (signal.aborted || this.#isTerminal()) return;
 
       // ---- history integration from LEKHA (durable, privacy-safe context for MANTRI)
@@ -298,8 +357,6 @@ export class AgentLoop {
 
       if (!result.ok) {
         if (result.kind === 'blocked') {
-          // A refused step is the most interesting thing the viewer can show, so it
-          // gets a row too - with no payload, because none was produced.
           this.transmissions.record({
             traceId,
             step,
@@ -310,8 +367,6 @@ export class AgentLoop {
             diff: extract.diff,
             blockedReason: result.reason,
           });
-          // The system refusing its own request is a feature, not an error. Surface it
-          // loudly and stop; a retry would send the same bad payload.
           this.#patch({
             phase: 'blocked',
             blockedCount: this.#state.blockedCount + 1,
@@ -358,6 +413,11 @@ export class AgentLoop {
       const outcome = await this.#actAll(plan.actions, step, history, signal, sessionId, traceId);
       if (signal.aborted || this.#isTerminal()) return;
 
+      if (outcome === 'blocked') {
+        // Security block or awaiting user — stop immediately, do NOT retry
+        return;
+      }
+
       if (plan.done || plan.actions.some((a) => a.op === 'done')) {
         const doneAction = plan.actions.find((a) => a.op === 'done');
         await this.#logLifecycle({
@@ -376,11 +436,6 @@ export class AgentLoop {
               : 'Task complete.',
         });
 
-        return;
-      }
-
-      if (outcome === 'blocked') {
-        // Security block or awaiting user — stop immediately, do NOT retry
         return;
       }
 
@@ -491,17 +546,15 @@ export class AgentLoop {
           reason_code: 'USER_DECLINED',
         });
 
-        // TODO/DEFERRED(ask_user-resume):
-        // Legitimate human interaction required. The existing AgentPhase contract
-        // ('idle'|'observing'|'sanitizing'|'sending'|'thinking'|'acting'|'done'|'blocked'|'error')
-        // does not define a dedicated 'waiting_for_user' phase, nor does messages.ts define a
-        // 'RESUME_TASK' / 'USER_RESPONSE' request. To safely pause without modifying SSG or
-        // inventing a premature messaging protocol, ask_user is paused via the terminal 'blocked'
-        // phase with a user-facing prompt ("Awaiting user response: ..."), ensuring zero browser
-        // actions are dispatched and no automatic retry occurs until interactive resume is added.
+        const q: AgentQuestion = {
+          fieldKey: (action as { field_key?: string }).field_key ?? 'user_input',
+          question: action.question,
+          options: (action as { options?: string[] }).options,
+        };
         this.#patch({
           phase: 'blocked',
           message: 'Awaiting user response: ' + action.question,
+          pendingQuestion: q,
         });
         return 'blocked';
       }
@@ -575,10 +628,22 @@ export class AgentLoop {
       );
     };
 
+    if (this.#tabId !== undefined && this.#tabId > 0) {
+      try {
+        const tab = await browser.tabs.get(this.#tabId);
+        if (!isNonWeb(tab)) return this.#tabId;
+      } catch {
+        // ignore
+      }
+    }
+
     // 1. Current window active tab (fast path for normal extension usage)
     try {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id !== undefined && !isNonWeb(tab)) return tab.id;
+      if (tab?.id !== undefined && !isNonWeb(tab)) {
+        this.#tabId = tab.id;
+        return tab.id;
+      }
     } catch {
       // ignore
     }
@@ -587,7 +652,10 @@ export class AgentLoop {
     try {
       const activeTabs = await browser.tabs.query({ active: true });
       const webActive = activeTabs.find((t) => !isNonWeb(t));
-      if (webActive?.id !== undefined) return webActive.id;
+      if (webActive?.id !== undefined) {
+        this.#tabId = webActive.id;
+        return webActive.id;
+      }
     } catch {
       // ignore
     }
@@ -596,7 +664,10 @@ export class AgentLoop {
     try {
       const allTabs = await browser.tabs.query({});
       const webTab = allTabs.find((t) => !isNonWeb(t));
-      if (webTab?.id !== undefined) return webTab.id;
+      if (webTab?.id !== undefined) {
+        this.#tabId = webTab.id;
+        return webTab.id;
+      }
     } catch {
       // ignore
     }
@@ -614,15 +685,36 @@ export class AgentLoop {
 
   async #extract(goal: string, step: number, traceId: string, sessionId: string): Promise<ExtractResult> {
     const tabId = await this.#activeTabId();
-    const reply = (await browser.tabs.sendMessage(tabId, {
-      kind: 'EXTRACT_SCREEN',
-      goal,
-      step,
-      traceId,
-      sessionId,
-    })) as ExtractResult | undefined;
-    if (reply === undefined) throw new Error('content script did not reply');
-    return reply;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const reply = (await browser.tabs.sendMessage(tabId, {
+          kind: 'EXTRACT_SCREEN',
+          goal,
+          step,
+          traceId,
+          sessionId,
+          autoFillPrefilled: this.#autoFillPrefilled,
+          userProfile: this.#userProfile ?? undefined,
+          userAnswers: Object.fromEntries(this.#userAnswers),
+        })) as ExtractResult | undefined;
+        if (reply !== undefined) return reply;
+      } catch {
+        if (attempt === 0 && browser.scripting?.executeScript) {
+          try {
+            await browser.scripting.executeScript({
+              target: { tabId },
+              files: ['content.js'],
+            });
+            await sleep(200);
+          } catch {
+            // ignore
+          }
+        } else {
+          await sleep(100);
+        }
+      }
+    }
+    throw new Error('content script did not reply');
   }
 
   async #execute(action: Action): Promise<ActionResult> {
@@ -664,7 +756,6 @@ export class AgentLoop {
         ...(input.reason_code !== undefined ? { reason_code: input.reason_code } : {}),
       });
     } catch (err) {
-      // Diagnostic logging failure must not fail browser action or task execution (RULES.md P6/P8 fail-safe for action logs)
       console.warn('LEKHA action logging failed:', err);
     }
   }
@@ -701,28 +792,10 @@ export class AgentLoop {
 
   /**
    * The live canary audit (ticket D17).
-   *
-   * Two independent questions, and the audit is only meaningful because it asks both.
-   *
-   *  1. **Did the redactor leak?** The tab plants canaries across twelve surfaces, runs
-   *     the REAL extractor over the real page, and searches the bytes it produced.
-   *     That number — `report.leaked` — is the headline, and it is a statement about
-   *     the component the headline names.
-   *
-   *  2. **Would the guard have caught it anyway?** Answered here, by offering a
-   *     canary-bearing payload to a real egress guard. This is the backstop, not the
-   *     measurement: scoring the audit on this alone (as an earlier version did) meant
-   *     a clean 0/60 could be reported with the redactor deleted entirely, because the
-   *     probes were synthetic payloads the pipeline had never touched.
-   *
-   * And `observed` remains the third leg: a leak count alone can be passed by a reader
-   * that looks nowhere.
    */
   async canaryAudit(): Promise<CanaryAuditResult> {
     const tabId = await this.#activeTabId();
-    const report = (await browser.tabs.sendMessage(tabId, {
-      kind: 'RUN_CANARY_AUDIT',
-    })) as {
+    let report: {
       total: number;
       observed: number;
       leaked: number;
@@ -739,10 +812,35 @@ export class AgentLoop {
       values: string[];
       payload: string;
       ranAt: number;
-    };
+    } | undefined;
 
-    // A throwaway ledger: an audit is not an egress and must not pollute the record
-    // the user is asked to trust.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        report = (await browser.tabs.sendMessage(tabId, {
+          kind: 'RUN_CANARY_AUDIT',
+        })) as typeof report;
+        if (report !== undefined) break;
+      } catch {
+        if (attempt === 0 && browser.scripting?.executeScript) {
+          try {
+            await browser.scripting.executeScript({
+              target: { tabId },
+              files: ['content.js'],
+            });
+            await sleep(200);
+          } catch {
+            // ignore
+          }
+        } else {
+          await sleep(100);
+        }
+      }
+    }
+
+    if (!report) {
+      throw new Error('Could not run canary audit: content script not responding on tab ' + tabId);
+    }
+
     const guard = createEgressGuard({
       serverOrigin: CONFIG.serverOrigin,
       ledger: new Ledger(new MemoryLedgerStore()),
@@ -750,8 +848,6 @@ export class AgentLoop {
       allowInsecureLocalhost: CONFIG.allowInsecureLocalhost,
     });
 
-    // The backstop. Each canary is planted into a payload and offered to the guard;
-    // every one must come back refused.
     let blocked = 0;
     for (const value of report.values) {
       const verdict = await guard(canaryProbe(value));
@@ -789,7 +885,6 @@ export class AgentLoop {
       detail: chainBad === null ? 'chain verified' : 'broken at entry ' + String(chainBad),
     });
 
-    // A deliberately dirty payload must be refused. This is the guard proving itself.
     const dirty = dirtyProbe();
     const verdict = await this.#guard(dirty);
     checks.push({
@@ -828,7 +923,6 @@ function dirtyProbe(): SSG {
         id: 'e1',
         role: 'textbox',
         bbox: [0, 0, 10, 10],
-        // Verhoeff-valid, so the L1 pack must catch it.
         value: '234567890124' as RedactedText,
         actionable: ['type'],
       },
@@ -850,9 +944,6 @@ function dirtyProbe(): SSG {
 function canaryProbe(canary: string): SSG {
   return {
     ssg_version: '1.0',
-    // Must be valid hex: an invalid id fails the SCHEMA check first, and the canary
-    // check never runs. The audit would then report a truthful 0/60 that proved
-    // nothing whatsoever - caught by the browser test asserting guardBlocked.
     session_id: 'eph_ca4a2b3c4d5e',
     trace_id: 't_0',
     step: 0,
@@ -881,7 +972,6 @@ function canaryProbe(canary: string): SSG {
 }
 
 function errName(e: unknown): string {
-  // P9: never surface a message; a thrown error can carry page text.
   return e instanceof Error ? e.name : 'Error';
 }
 

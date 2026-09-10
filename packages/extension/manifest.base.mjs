@@ -32,7 +32,7 @@ export function buildManifest({ target, version, serverOrigin }) {
     name: NAME,
     version,
     description: DESCRIPTION,
-    permissions: ['storage', 'activeTab', 'scripting', 'tabs'],
+    permissions: ['storage', 'activeTab', 'scripting', 'tabs', 'notifications'],
     host_permissions: [hostPermission],
     content_scripts: [
       {
@@ -49,6 +49,12 @@ export function buildManifest({ target, version, serverOrigin }) {
       // S7: no remote code, no eval. MV3 requires this and it is also just correct.
       extension_pages: "script-src 'self'; object-src 'self';",
     },
+    web_accessible_resources: [
+      {
+        resources: ['assets/animations/*', 'assets/animations/mascot/*', 'assets/animations/lottie/*'],
+        matches: ['<all_urls>'],
+      },
+    ],
   };
 
   if (target === 'chrome') {

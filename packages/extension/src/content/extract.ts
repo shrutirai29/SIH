@@ -25,10 +25,13 @@ import { CONFIG } from '../shared/config.js';
 import { createEphemeralSession, getSession, type KavachSession } from './session.js';
 import { isOverlayNode, setMarks } from './overlay.js';
 
+import { getStoredProfile, getSavedFields } from '../shared/profile.js';
+
 const INTERACTIVE = [
   'a[href]', 'button', 'input:not([type=hidden])', 'select', 'textarea',
   '[role=button]', '[role=link]', '[role=textbox]', '[role=checkbox]',
   '[role=radio]', '[role=combobox]', '[role=tab]', '[contenteditable=true]',
+  '.whsOnd', '.KHZ21e', '.QuantumWizTextinputPaperinputInput',
 ].join(',');
 
 /** The shared symbol standing in for any credential; never resolvable. */
@@ -77,6 +80,19 @@ function labelTextFor(el: Element): string {
   return '';
 }
 
+function contextualLabelFor(el: Element): string {
+  // Check closest question/field container (Google Forms, Typeform, standard form wrappers)
+  const container = el.closest('[role=listitem], [role=group], .geS5n, .Qr7Oae, .form-group, .field, fieldset, .freebirdFormviewerViewItemsItemItem');
+  if (container !== null) {
+    const titleEl = container.querySelector('[role=heading], .M7eMe, legend, label, .label, h1, h2, h3, h4, h5, h6');
+    if (titleEl !== null && titleEl !== el) {
+      const text = titleEl.textContent?.trim() ?? '';
+      if (text.length > 0) return text;
+    }
+  }
+  return '';
+}
+
 function accessibleName(el: Element): string {
   const labelledBy = el.getAttribute('aria-labelledby');
   if (labelledBy !== null) {
@@ -92,6 +108,9 @@ function accessibleName(el: Element): string {
 
   const label = labelTextFor(el);
   if (label.length > 0) return label;
+
+  const contextLabel = contextualLabelFor(el);
+  if (contextLabel.length > 0) return contextLabel;
 
   if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
     const placeholder = el.getAttribute('placeholder');
@@ -155,10 +174,14 @@ function actionsFor(el: Element, role: string): Actionable[] {
     el instanceof HTMLTextAreaElement ||
     (el instanceof HTMLInputElement &&
       !['checkbox', 'radio', 'submit', 'button', 'reset'].includes(el.type)) ||
-    el.getAttribute('contenteditable') === 'true';
+    el.getAttribute('contenteditable') === 'true' ||
+    role === 'textbox' ||
+    role === 'searchbox' ||
+    role === 'combobox' ||
+    el.querySelector('input:not([type=hidden]), textarea') !== null;
 
   if (editable) out.push('type', 'clear');
-  if (role === 'combobox' && el instanceof HTMLSelectElement) out.push('select');
+  if (role === 'combobox' || el instanceof HTMLSelectElement) out.push('select');
   out.push('click', 'focus');
   return out;
 }
@@ -276,7 +299,9 @@ export interface ExtractOptions {
    * destroy the vault of a task that is mid-flight, or repoint the element ids the
    * executor is about to resolve.
    */
-  ephemeral?: boolean;
+  ephemeral?: boolean | undefined;
+  autoFillPrefilled?: boolean | undefined;
+  userAnswers?: Record<string, string> | undefined;
 }
 
 export interface ExtractOutput {
@@ -467,7 +492,32 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
   // closed — and the user saw `PII_DETECTED` with nothing connecting it to what they
   // had typed. Redacting it turns a dead end into the feature working: the planner
   // gets `⟦AADHAAR_1⟧` and can ask for it back by reference.
-  const goal = await redactText(opts.goal.slice(0, 512), {
+  let augmentedGoal = opts.goal;
+  if (opts.autoFillPrefilled) {
+    const profile = await getStoredProfile();
+    const savedFields = await getSavedFields();
+    const allAnswers = { ...savedFields, ...(opts.userAnswers || {}) };
+    const pDetails: string[] = [];
+    if (profile) {
+      if (profile.fullName) pDetails.push(`name ${profile.fullName}`);
+      if (profile.enrollmentNo) pDetails.push(`roll ${profile.enrollmentNo}`);
+      if (profile.phone) pDetails.push(`mobile ${profile.phone}`);
+      if (profile.email) pDetails.push(`email ${profile.email}`);
+      if (profile.dob) pDetails.push(`date ${profile.dob}`);
+    }
+
+    for (const [key, val] of Object.entries(allAnswers)) {
+      if (typeof val === 'string' && val.trim().length > 0) {
+        pDetails.push(`${key} ${val.trim()}`);
+      }
+    }
+
+    if (pDetails.length > 0) {
+      augmentedGoal = `${opts.goal} [SavedProfile: ${pDetails.join(', ')}]`;
+    }
+  }
+
+  const goal = await redactText(augmentedGoal.slice(0, 768), {
     vault: session.vault,
     policy: session.policy,
     originElementId: 'page-goal',
@@ -518,12 +568,14 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
       policy_id: 'in-default-v1',
       counts,
       methods: { placeholder: total },
-      detectors: ['dom-rules@0.2', 'regex-in@0.2', 'ner-context@0.2', 'netra-vision@1.0'],
+      detectors: ['dom-rules@0.2', 'regex-in@0.2'],
+      // Honest: with no NER and no vision running, contextual and visual PII are not
+      // covered, and the server is told so rather than left to assume.
       coverage_confidence: coverageConfidence({
         detections: [],
         unexplainedPixelRatio: 0,
         timedOutDetectors: [],
-        activeLayers: ['l0-dom', 'l1-regex', 'l2-ner', 'l3-vision'],
+        activeLayers: ['l0-dom', 'l1-regex'],
       }),
       unexplained_pixel_ratio: 0,
       marker_convention: 'text-only (tier 1)',

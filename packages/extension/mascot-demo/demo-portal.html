@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en-IN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rajya Kisan Samman Nidhi — Application</title>
+    <style>
+      :root {
+        --ink: #14202e;
+        --muted: #5b6674;
+        --line: #d8dee7;
+        --brand: #12507e;
+        --band: #f5f7fa;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: var(--ink);
+        background: var(--band);
+      }
+      header {
+        background: var(--brand);
+        color: #fff;
+        padding: 14px 24px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      header .seal {
+        width: 40px; height: 40px; border-radius: 50%;
+        background: #fff; color: var(--brand);
+        display: grid; place-items: center; font-weight: 700; font-size: 18px;
+      }
+      header h1 { font-size: 17px; margin: 0; }
+      header p { margin: 0; font-size: 12px; opacity: 0.85; }
+      main { max-width: 820px; margin: 22px auto 60px; padding: 0 18px; }
+      .card {
+        background: #fff; border: 1px solid var(--line);
+        border-radius: 10px; padding: 20px 22px; margin-bottom: 18px;
+      }
+      h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
+           color: var(--muted); margin: 0 0 14px; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+      .full { grid-column: 1 / -1; }
+      label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+      input, select, textarea {
+        width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+        border-radius: 7px; font: inherit; background: #fff; color: inherit;
+      }
+      .applicant { display: flex; gap: 16px; align-items: flex-start; }
+      .photo {
+        width: 96px; height: 116px; flex: none; border: 1px solid var(--line);
+        border-radius: 6px; background:
+          radial-gradient(circle at 50% 34%, #c9b79c 0 22px, transparent 23px),
+          radial-gradient(ellipse at 50% 96%, #8fa3b8 0 40px, transparent 41px),
+          #e8edf3;
+      }
+      .note { color: var(--muted); font-size: 13px; }
+      .actions { display: flex; gap: 10px; justify-content: flex-end; }
+      button {
+        padding: 9px 18px; border-radius: 7px; border: 1px solid var(--line);
+        background: #fff; font: inherit; cursor: pointer;
+      }
+      button.primary { background: var(--brand); border-color: var(--brand); color: #fff; font-weight: 600; }
+      .banner {
+        border-left: 3px solid #b3261e; background: #fff4f3;
+        padding: 10px 14px; border-radius: 0 8px 8px 0; margin-bottom: 18px; font-size: 13px;
+      }
+      footer { text-align: center; color: var(--muted); font-size: 12px; padding: 16px; }
+      .spacer { height: 900px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="seal">RK</div>
+      <div>
+        <h1>Rajya Kisan Samman Nidhi</h1>
+        <p>Department of Agriculture &amp; Farmers' Welfare · Application Portal</p>
+      </div>
+    </header>
+
+    <main>
+      <div class="banner">
+        <strong>Fictional test page.</strong> Every identifier below is synthetic and
+        generated to be checksum-valid, so PRAHARI's detectors treat it exactly as they
+        would treat a real one. Nothing here belongs to a real person.
+      </div>
+
+      <section class="card">
+        <h2>Applicant details</h2>
+        <div class="applicant">
+          <div class="photo" role="img" aria-label="Passport photograph of the applicant"></div>
+          <div class="grid" style="flex: 1">
+            <div>
+              <label for="fullname">Full name</label>
+              <input id="fullname" name="fullname" autocomplete="name" value="Asha Ramesh Patil" />
+            </div>
+            <div>
+              <label for="dob">Date of birth</label>
+              <input id="dob" name="dob" type="date" autocomplete="bday" value="1992-04-17" />
+            </div>
+            <div>
+              <label for="aadhaar">Aadhaar number</label>
+              <!-- Verhoeff-valid synthetic Aadhaar. -->
+              <input id="aadhaar" name="aadhaar" value="2345 6789 0124" placeholder="XXXX XXXX XXXX" />
+            </div>
+            <div>
+              <label for="pan">PAN</label>
+              <input id="pan" name="pan" value="ABCPE1234F" />
+            </div>
+            <div>
+              <label for="mobile">Mobile number</label>
+              <input id="mobile" name="mobile" type="tel" autocomplete="tel" value="9876543210" />
+            </div>
+            <div>
+              <label for="email">Email address</label>
+              <input id="email" name="email" type="email" autocomplete="email" value="asha.patil@example.com" />
+            </div>
+            <div class="full">
+              <label for="address">Residential address</label>
+              <textarea id="address" name="address" rows="2" autocomplete="street-address">Plot 14, Shivaji Nagar, Pune, Maharashtra 411005</textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Bank account for direct benefit transfer</h2>
+        <div class="grid">
+          <div>
+            <label for="account">Account number</label>
+            <input id="account" name="account" value="50100234567890" />
+          </div>
+          <div>
+            <label for="ifsc">IFSC code</label>
+            <input id="ifsc" name="ifsc" value="HDFC0001234" />
+          </div>
+          <div>
+            <label for="upi">UPI ID (optional)</label>
+            <input id="upi" name="upi" value="asha.patil@okhdfcbank" />
+          </div>
+          <div>
+            <label for="branch">Branch</label>
+            <select id="branch" name="branch">
+              <option>Shivaji Nagar</option>
+              <option>Kothrud</option>
+              <option>Hadapsar</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Portal sign-in</h2>
+        <div class="grid">
+          <div>
+            <label for="userid">User ID</label>
+            <input id="userid" name="userid" value="asha.patil" />
+          </div>
+          <div>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" value="hunter2-not-real" />
+          </div>
+          <div>
+            <label for="otp">One-time password</label>
+            <input id="otp" name="otp" autocomplete="one-time-code" inputmode="numeric" value="482915" />
+          </div>
+        </div>
+      </section>
+
+      <div class="spacer" aria-hidden="true"></div>
+
+      <section class="card">
+        <h2>Declaration</h2>
+        <p class="note">
+          I declare that the particulars given above are true. I consent to verification
+          of my Aadhaar 2345 6789 0124 against the UIDAI database for the purpose of this
+          application only.
+        </p>
+        <div class="actions">
+          <button type="button" id="save">Save draft</button>
+          <button type="submit" class="primary" id="submit">Submit application</button>
+        </div>
+      </section>
+    </main>
+
+    <footer>This page exists to test a privacy filter. It is not a government service.</footer>
+
+    <script>
+      // Kept trivial on purpose: the page must not fight the agent, only be realistic.
+      document.getElementById('submit').addEventListener('click', (e) => {
+        e.preventDefault();
+        alert('Submitted (not really — this is a test page).');
+      });
+    </script>
+  </body>
+</html>

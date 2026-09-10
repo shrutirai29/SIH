@@ -95,13 +95,14 @@ export async function postStep(guard: EgressGuard, ssg: SSG, image?: Blob): Prom
         ok: false,
         kind: 'server',
         status: response.status,
-        detail: body.error ?? response.statusText,
+        detail: body.detail ? `${body.error ? body.error + ': ' : ''}${body.detail}` : (body.error ?? response.statusText),
       };
     }
 
     fate = 'sent';
     fault = undefined;
-    const plan = (await response.json()) as ActionPlan;
+    const body = (await response.json()) as Record<string, unknown>;
+    const plan = (body && typeof body === 'object' && 'plan' in body && body.plan ? body.plan : body) as ActionPlan;
     return {
       ok: true,
       plan,

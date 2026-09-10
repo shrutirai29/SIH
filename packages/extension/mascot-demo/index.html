@@ -1,0 +1,1439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PRAHARI Fox Mascot — Interactive Studio & Floating Overlay Demo</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+      background: #070a13;
+      color: #e2e8f0;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Ambient background glow */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: 
+        radial-gradient(circle at 15% 30%, rgba(59, 130, 246, 0.12) 0%, transparent 45%),
+        radial-gradient(circle at 85% 20%, rgba(168, 85, 247, 0.1) 0%, transparent 45%),
+        radial-gradient(circle at 50% 85%, rgba(245, 158, 11, 0.08) 0%, transparent 50%);
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    .page-content {
+      position: relative;
+      z-index: 1;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 24px 80px;
+    }
+
+    .header-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: rgba(59, 130, 246, 0.12);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      color: #60a5fa;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .hero-title {
+      font-size: 42px;
+      font-weight: 900;
+      background: linear-gradient(135deg, #fbbf24 0%, #f97316 40%, #ec4899 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+      letter-spacing: -1px;
+    }
+
+    .hero-sub {
+      color: #94a3b8;
+      font-size: 15px;
+      max-width: 760px;
+      margin-bottom: 30px;
+      line-height: 1.6;
+    }
+
+    /* Controls Panel */
+    .controls-panel {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      padding: 18px 22px;
+      margin-bottom: 36px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 20px 40px -15px rgba(0,0,0,0.5);
+    }
+
+    .controls-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .controls-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .floating-toggle-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 10px;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #60a5fa;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .floating-toggle-btn:hover {
+      background: rgba(59, 130, 246, 0.3);
+      transform: translateY(-1px);
+    }
+
+    .controls-bar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .state-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border: 1.5px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      background: rgba(30, 41, 59, 0.6);
+      color: #cbd5e1;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .state-btn:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255,255,255,0.25);
+      background: rgba(51, 65, 85, 0.8);
+      color: #fff;
+    }
+
+    .state-btn.active {
+      border-color: var(--btn-color, #3b82f6);
+      background: var(--btn-bg, rgba(59, 130, 246, 0.25));
+      color: #fff;
+      box-shadow: 0 0 25px var(--btn-glow, rgba(59, 130, 246, 0.35));
+    }
+
+    .state-btn[data-state="idle"] { --btn-color: #38bdf8; --btn-bg: rgba(56, 189, 248, 0.2); --btn-glow: rgba(56, 189, 248, 0.35); }
+    .state-btn[data-state="thinking"] { --btn-color: #818cf8; --btn-bg: rgba(129, 140, 248, 0.2); --btn-glow: rgba(129, 140, 248, 0.35); }
+    .state-btn[data-state="running"] { --btn-color: #f59e0b; --btn-bg: rgba(245, 158, 11, 0.25); --btn-glow: rgba(245, 158, 11, 0.4); }
+    .state-btn[data-state="success"] { --btn-color: #22c55e; --btn-bg: rgba(34, 197, 94, 0.25); --btn-glow: rgba(34, 197, 94, 0.4); }
+    .state-btn[data-state="error"] { --btn-color: #ef4444; --btn-bg: rgba(239, 68, 68, 0.25); --btn-glow: rgba(239, 68, 68, 0.4); }
+
+    /* Success Sub-Variants Bar */
+    .success-variants-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      flex-wrap: wrap;
+    }
+
+    .success-variants-bar.visible {
+      display: flex;
+    }
+
+    .variant-btn {
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      color: #86efac;
+      transition: all 0.2s ease;
+    }
+
+    .variant-btn:hover {
+      background: rgba(34, 197, 94, 0.25);
+      transform: translateY(-1px);
+    }
+
+    .variant-btn.active {
+      background: #22c55e;
+      color: #052e16;
+      border-color: #22c55e;
+      font-weight: 700;
+      box-shadow: 0 0 15px rgba(34, 197, 94, 0.5);
+    }
+
+    /* Main Stage Layout */
+    .stage {
+      display: grid;
+      grid-template-columns: 1fr 350px;
+      gap: 32px;
+      align-items: start;
+    }
+
+    @media (max-width: 960px) {
+      .stage {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Primary Mascot Display Card */
+    .mascot-card {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 24px;
+      padding: 36px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 25px 60px -15px rgba(0,0,0,0.6);
+    }
+
+    .mascot-stage-header {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .mascot-source-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #94a3b8;
+    }
+
+    .mascot-source-tag.highlight {
+      background: rgba(245, 158, 11, 0.15);
+      border-color: rgba(245, 158, 11, 0.4);
+      color: #fbbf24;
+    }
+
+    /* Mascot Viewport */
+    .mascot-viewport {
+      position: relative;
+      width: 320px;
+      height: 380px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .mascot-aura {
+      position: absolute;
+      width: 270px;
+      height: 270px;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--aura-color, rgba(56, 189, 248, 0.2)) 0%, transparent 70%);
+      filter: blur(25px);
+      animation: auraBreath 3.5s ease-in-out infinite;
+      transition: background 0.5s ease;
+      z-index: 1;
+    }
+
+    @keyframes auraBreath {
+      0%, 100% { transform: scale(1); opacity: 0.7; }
+      50% { transform: scale(1.18); opacity: 1; }
+    }
+
+    .mascot-layers {
+      position: relative;
+      width: 250px;
+      height: 290px;
+      z-index: 2;
+    }
+
+    /* Fox Lottie Container */
+    #fox-lottie-container {
+      width: 100%;
+      height: 100%;
+      filter: drop-shadow(0 12px 30px rgba(0,0,0,0.45));
+      transition: filter 0.4s ease;
+    }
+
+    /* FX Canvas for Eyes & Particles */
+    #fx-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* State Badge Pill */
+    .status-pill {
+      position: absolute;
+      bottom: -10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 18px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      z-index: 20;
+      backdrop-filter: blur(10px);
+      border: 1px solid;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+      transition: all 0.3s ease;
+    }
+
+    .status-pill[data-state="idle"] {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: rgba(56, 189, 248, 0.5);
+      color: #7dd3fc;
+    }
+    .status-pill[data-state="thinking"] {
+      background: rgba(129, 140, 248, 0.2);
+      border-color: rgba(129, 140, 248, 0.5);
+      color: #a5b4fc;
+      animation: pulseAnim 1.8s infinite;
+    }
+    .status-pill[data-state="running"] {
+      background: rgba(245, 158, 11, 0.22);
+      border-color: rgba(245, 158, 11, 0.5);
+      color: #fde68a;
+      animation: pulseAnim 1.2s infinite;
+    }
+    .status-pill[data-state="success"] {
+      background: rgba(34, 197, 94, 0.22);
+      border-color: rgba(34, 197, 94, 0.5);
+      color: #86efac;
+    }
+    .status-pill[data-state="error"] {
+      background: rgba(239, 68, 68, 0.22);
+      border-color: rgba(239, 68, 68, 0.5);
+      color: #fca5a5;
+    }
+
+    @keyframes pulseAnim {
+      0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+      50% { opacity: 0.75; transform: translateX(-50%) scale(1.05); }
+    }
+
+    /* Running Bounce & Shake Keyframes */
+    @keyframes foxRunningBounce {
+      0%, 100% { transform: translateY(0) rotate(0deg); }
+      25% { transform: translateY(-10px) rotate(-1.5deg); }
+      50% { transform: translateY(0) rotate(0deg); }
+      75% { transform: translateY(-10px) rotate(1.5deg); }
+    }
+
+    .fox-running-active {
+      animation: foxRunningBounce 0.75s ease-in-out infinite;
+    }
+
+    @keyframes foxErrorShake {
+      0%, 100% { transform: translate(0, 0) rotate(0); }
+      15% { transform: translate(-8px, -2px) rotate(-4deg); }
+      30% { transform: translate(8px, 2px) rotate(4deg); }
+      45% { transform: translate(-6px, 1px) rotate(-2deg); }
+      60% { transform: translate(6px, -1px) rotate(2deg); }
+      75% { transform: translate(-3px, 0) rotate(-1deg); }
+      90% { transform: translate(3px, 0) rotate(1deg); }
+    }
+
+    .fox-error-active {
+      animation: foxErrorShake 0.75s ease-in-out;
+    }
+
+    @keyframes foxSuccessPop {
+      0% { transform: scale(1); }
+      35% { transform: scale(1.15) translateY(-12px); }
+      65% { transform: scale(0.95); }
+      100% { transform: scale(1); }
+    }
+
+    .fox-success-active {
+      animation: foxSuccessPop 0.65s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    /* Feature Legend */
+    .feature-legend {
+      width: 100%;
+      margin-top: 28px;
+      padding: 16px 20px;
+      background: rgba(30, 41, 59, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 14px;
+      font-size: 13px;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+
+    .feature-legend strong {
+      color: #f1f5f9;
+    }
+
+    /* How to Run in Extension Section */
+    .extension-run-guide {
+      width: 100%;
+      margin-top: 20px;
+      padding: 16px 20px;
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 14px;
+      font-size: 13px;
+      color: #cbd5e1;
+      line-height: 1.6;
+    }
+
+    .extension-run-guide h4 {
+      color: #60a5fa;
+      font-size: 14px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .extension-run-guide ol {
+      margin-left: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .extension-run-guide kbd {
+      background: rgba(0,0,0,0.4);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.15);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #e2e8f0;
+    }
+
+    /* Task Progress Widget Card */
+    .task-widget {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
+    }
+
+    .widget-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 18px;
+      background: rgba(30, 41, 59, 0.5);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      transition: all 0.3s ease;
+    }
+
+    .status-dot.idle { background: #38bdf8; box-shadow: 0 0 10px #38bdf8; }
+    .status-dot.thinking { background: #818cf8; box-shadow: 0 0 10px #818cf8; animation: dotPulse 1.4s infinite; }
+    .status-dot.running { background: #f59e0b; box-shadow: 0 0 12px #f59e0b; animation: dotPulse 1s infinite; }
+    .status-dot.success { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+    .status-dot.error { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
+
+    @keyframes dotPulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.4); opacity: 0.5; }
+    }
+
+    .widget-title {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      color: #93c5fd;
+    }
+
+    .widget-subtitle {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 1px;
+    }
+
+    .widget-body {
+      padding: 16px 18px;
+    }
+
+    .goal-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      background: rgba(0,0,0,0.35);
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.05);
+      margin-bottom: 16px;
+    }
+
+    .goal-tag {
+      font-size: 9px;
+      font-weight: 800;
+      color: #38bdf8;
+      letter-spacing: 0.5px;
+    }
+
+    .goal-text {
+      font-size: 12px;
+      color: #e2e8f0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .task-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .task-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid transparent;
+      transition: all 0.3s ease;
+    }
+
+    .task-item.active {
+      background: rgba(59, 130, 246, 0.12);
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    .task-item.done {
+      opacity: 0.8;
+      background: rgba(34, 197, 94, 0.06);
+    }
+
+    .task-item.failed {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.25);
+    }
+
+    .progress-circle {
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+
+    .progress-circle svg { width: 100%; height: 100%; }
+    .progress-track { fill: none; stroke: rgba(255,255,255,0.12); stroke-width: 3; }
+    .progress-bar { fill: none; stroke: #3b82f6; stroke-width: 3; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; }
+    .progress-bar.spinning { animation: spin 1.4s linear infinite; }
+    @keyframes spin { to { transform: rotate(270deg); } }
+
+    .check-circle { fill: #22c55e; }
+    .check-path { fill: none; stroke: #fff; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    .fail-circle { fill: #ef4444; }
+    .fail-line { stroke: #fff; stroke-width: 2.5; stroke-linecap: round; }
+    .pending-circle { fill: none; stroke: rgba(255,255,255,0.18); stroke-width: 2; stroke-dasharray: 3 3; }
+
+    .task-name { font-size: 12px; font-weight: 600; color: #e2e8f0; }
+    .task-detail { font-size: 10px; color: #94a3b8; margin-top: 1px; }
+
+    .widget-footer {
+      padding: 12px 18px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .shield-badge {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      color: #a7f3d0;
+      background: rgba(16, 185, 129, 0.1);
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .step-counter { font-size: 11px; color: #64748b; font-weight: 600; }
+
+    /* ================= IN-PAGE FLOATING MASCOT OVERLAY (SIMULATED EXTENSION WIDGET) ================= */
+    .floating-mascot-host {
+      position: fixed;
+      right: 28px;
+      bottom: 28px;
+      display: flex;
+      align-items: flex-end;
+      gap: 12px;
+      z-index: 999999;
+      cursor: grab;
+      user-select: none;
+      transition: transform 0.1s ease-out;
+    }
+
+    .floating-mascot-host.dragging {
+      cursor: grabbing;
+      transition: none;
+    }
+
+    .floating-avatar-box {
+      position: relative;
+      width: 90px;
+      height: 90px;
+      border-radius: 50%;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(16px);
+      border: 2px solid rgba(245, 158, 11, 0.4);
+      box-shadow: 0 12px 35px -5px rgba(0,0,0,0.6), 0 0 20px rgba(245, 158, 11, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .floating-avatar-box:hover {
+      transform: scale(1.08);
+    }
+
+    #mini-fox-container {
+      width: 80px;
+      height: 80px;
+    }
+
+    .floating-drag-pill {
+      position: absolute;
+      bottom: -6px;
+      background: rgba(30, 41, 59, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #94a3b8;
+      font-size: 9px;
+      padding: 1px 6px;
+      border-radius: 8px;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page-content">
+    <div class="header-badge">PRAHARI Autonomous Agent</div>
+    <h1 class="hero-title">🦊 Fox Mascot Interactive Studio</h1>
+    <p class="hero-sub">
+      Experience the Fox mascot in all states: dynamic eye-tracking in Idle mode, animated running legs in Running Task, loading circle eyes in Thinking mode, exclamation mark alert eyes in Error, and multiple rich celebrations in Success!
+    </p>
+
+    <!-- Controls Panel -->
+    <div class="controls-panel">
+      <div class="controls-top">
+        <div class="controls-label">Select Agent Runtime State</div>
+        <button class="floating-toggle-btn" onclick="toggleFloatingWidget()">
+          <span id="floating-toggle-text">✨ Hide Floating Mascot Overlay</span>
+        </button>
+      </div>
+
+      <div class="controls-bar">
+        <button class="state-btn active" data-state="idle" onclick="setState('idle')">
+          <span>🦊</span> Idle (Fox Eye Tracking)
+        </button>
+        <button class="state-btn" data-state="thinking" onclick="setState('thinking')">
+          <span>🌀</span> Thinking (Eye Loading Circles)
+        </button>
+        <button class="state-btn" data-state="running" onclick="setState('running')">
+          <span>⚡</span> Running Task (Legs Running & Speed FX)
+        </button>
+        <button class="state-btn" data-state="success" onclick="setState('success')">
+          <span>🎉</span> Success (Celebrations)
+        </button>
+        <button class="state-btn" data-state="error" onclick="setState('error')">
+          <span>❌</span> Error (Exclamation Mark Eyes)
+        </button>
+      </div>
+
+      <!-- Success Sub-variants -->
+      <div class="success-variants-bar" id="success-variants-bar">
+        <span class="controls-label" style="margin-right: 6px;">Celebration Style:</span>
+        <button class="variant-btn active" onclick="setSuccessVariant('confetti')">🎊 Confetti & Stars</button>
+        <button class="variant-btn" onclick="setSuccessVariant('fireworks')">🎆 Neon Fireworks</button>
+        <button class="variant-btn" onclick="setSuccessVariant('golden_shield')">🛡️ Golden Shield Aura</button>
+        <button class="variant-btn" onclick="setSuccessVariant('joy_dance')">💖 Joy Dance Bounce</button>
+        <button class="variant-btn" onclick="triggerRandomCelebration()" style="background: rgba(168, 85, 247, 0.2); border-color: rgba(168, 85, 247, 0.4); color: #d8b4fe;">🎲 Random Blast</button>
+      </div>
+    </div>
+
+    <!-- Main Interactive Stage -->
+    <div class="stage">
+      <!-- Mascot Viewport Card -->
+      <div class="mascot-card">
+        <div class="mascot-stage-header">
+          <span class="mascot-source-tag highlight" id="engine-tag">Fox Mascot Lottie (fox-base.json)</span>
+          <span class="mascot-source-tag" id="tracking-tag">Mouse Gaze: Active (Move Cursor)</span>
+        </div>
+
+        <div class="mascot-viewport" id="mascot-viewport">
+          <div class="mascot-aura" id="mascot-aura"></div>
+
+          <div class="mascot-layers" id="mascot-layers">
+            <!-- Fox Lottie Container -->
+            <div id="fox-lottie-container"></div>
+
+            <!-- Dynamic FX Canvas Overlay (Eyes & Particle Systems) -->
+            <canvas id="fx-canvas" width="500" height="580"></canvas>
+
+            <div class="status-pill" id="status-pill" data-state="idle">IDLE (FOX EYE-TRACKING)</div>
+          </div>
+        </div>
+
+        <div class="feature-legend" id="feature-legend">
+          <strong>🦊 Idle Mode:</strong> The Fox breathes smoothly while dynamically tracking your cursor. Move your mouse across this page to see the Fox's head and gaze follow you!
+        </div>
+
+        <!-- Extension Run Guide -->
+        <div class="extension-run-guide">
+          <h4>🚀 How to see the Floating Fox Mascot in the Chrome / Firefox Extension:</h4>
+          <ol>
+            <li>Go to <kbd>chrome://extensions/</kbd> (or <kbd>about:debugging</kbd> in Firefox).</li>
+            <li>Enable <strong>Developer mode</strong> and click <strong>"Load unpacked"</strong>.</li>
+            <li>Select the folder: <kbd>packages/extension/dist-chrome</kbd> (built & ready).</li>
+            <li>Open any webpage (e.g. Cleartrip, Google, or any tab) and click the <strong>PRAHARI</strong> toolbar icon — the <strong>Floating Draggable Fox Mascot</strong> will appear directly on your page!</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- Task Execution Widget -->
+      <div class="task-widget">
+        <div class="widget-header">
+          <div class="status-dot idle" id="status-dot"></div>
+          <div>
+            <div class="widget-title">PRAHARI AGENT RUNTIME</div>
+            <div class="widget-subtitle" id="widget-status">Awaiting user goal...</div>
+          </div>
+        </div>
+
+        <div class="widget-body">
+          <div class="goal-bar">
+            <span class="goal-tag">GOAL</span>
+            <span class="goal-text" id="goal-text">Vision Assistant Idle</span>
+          </div>
+
+          <div class="task-list" id="task-list">
+            <!-- Dynamic task items -->
+          </div>
+        </div>
+
+        <div class="widget-footer">
+          <div class="shield-badge">🛡️ <span id="redaction-count">0</span> Redactions</div>
+          <div class="step-counter">Step <span id="step-num">0</span>/4</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-Page Floating Draggable Mascot Overlay (Simulating Extension Behavior) -->
+  <div class="floating-mascot-host" id="floating-mascot" title="Drag to reposition floating mascot">
+    <div class="floating-avatar-box">
+      <div id="mini-fox-container"></div>
+      <div class="floating-drag-pill">⋮⋮ DRAG</div>
+    </div>
+  </div>
+
+  <!-- CDN Scripts -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.12.2/lottie.min.js"></script>
+
+  <script>
+    // ================= GLOBAL STATE =================
+    let currentState = 'idle';
+    let currentSuccessVariant = 'confetti';
+    let mouseX = window.innerWidth / 2;
+    let mouseY = window.innerHeight / 2;
+
+    // Gaze tracking for Fox
+    let targetGazeX = 0, targetGazeY = 0;
+    let currentGazeX = 0, currentGazeY = 0;
+
+    // Lottie State
+    let lottieAnim = null;
+    let miniLottieAnim = null;
+    let loadedLottieFile = '';
+
+    // FX Canvas
+    const fxCanvas = document.getElementById('fx-canvas');
+    const fxCtx = fxCanvas.getContext('2d');
+    let particles = [];
+
+    // ================= LOTTIE LOADER =================
+    async function loadLottieForState(state) {
+      const container = document.getElementById('fox-lottie-container');
+      const miniContainer = document.getElementById('mini-fox-container');
+      const fileName = (state === 'running') ? 'fox-running.json' : 'fox-base.json';
+
+      if (loadedLottieFile === fileName && lottieAnim) {
+        updateLottieSpeed(state);
+        return;
+      }
+
+      try {
+        const resp = await fetch(`./assets/animations/lottie/${fileName}`);
+        const data = await resp.json();
+
+        if (lottieAnim) {
+          lottieAnim.destroy();
+          lottieAnim = null;
+        }
+        if (miniLottieAnim) {
+          miniLottieAnim.destroy();
+          miniLottieAnim = null;
+        }
+
+        // Main Stage Fox
+        lottieAnim = lottie.loadAnimation({
+          container: container,
+          renderer: 'svg',
+          loop: true,
+          autoplay: true,
+          animationData: data,
+        });
+
+        // Floating Mini Mascot Fox
+        if (miniContainer) {
+          miniLottieAnim = lottie.loadAnimation({
+            container: miniContainer,
+            renderer: 'svg',
+            loop: true,
+            autoplay: true,
+            animationData: data,
+          });
+        }
+
+        loadedLottieFile = fileName;
+        updateLottieSpeed(state);
+      } catch (err) {
+        console.error('Failed to load lottie:', fileName, err);
+      }
+    }
+
+    function updateLottieSpeed(state) {
+      const speed = (state === 'running') ? 2.2 : (state === 'thinking') ? 0.8 : (state === 'success') ? 1.2 : (state === 'error') ? 0.4 : 1.0;
+      if (lottieAnim) lottieAnim.setSpeed(speed);
+      if (miniLottieAnim) miniLottieAnim.setSpeed(speed);
+    }
+
+    // ================= STATE SWITCHER =================
+    function setState(state) {
+      currentState = state;
+
+      // Update buttons
+      document.querySelectorAll('.state-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.state === state);
+      });
+
+      // Show/hide success variants bar
+      const successBar = document.getElementById('success-variants-bar');
+      successBar.classList.toggle('visible', state === 'success');
+
+      // Update Header & Feature Legend
+      const engineTag = document.getElementById('engine-tag');
+      const legend = document.getElementById('feature-legend');
+      const layers = document.getElementById('mascot-layers');
+      const pill = document.getElementById('status-pill');
+
+      // Clear animation classes
+      layers.classList.remove('fox-running-active', 'fox-error-active', 'fox-success-active');
+
+      // Update Aura
+      const auraColors = {
+        idle: 'rgba(56, 189, 248, 0.22)',
+        thinking: 'rgba(129, 140, 248, 0.28)',
+        running: 'rgba(245, 158, 11, 0.32)',
+        success: 'rgba(34, 197, 94, 0.32)',
+        error: 'rgba(239, 68, 68, 0.35)',
+      };
+      document.getElementById('mascot-aura').style.background =
+        `radial-gradient(circle, ${auraColors[state]} 0%, transparent 70%)`;
+
+      // Status Pill
+      const pillLabels = {
+        idle: 'IDLE (FOX EYE-TRACKING)',
+        thinking: 'THINKING (EYE LOADING SCAN)',
+        running: 'RUNNING (LEGS ANIMATED + FX)',
+        success: 'SUCCESS (CELEBRATION)',
+        error: 'ERROR (EXCLAMATION EYES)',
+      };
+      pill.textContent = pillLabels[state];
+      pill.dataset.state = state;
+
+      loadLottieForState(state);
+
+      if (state === 'idle') {
+        engineTag.textContent = 'Fox Mascot Lottie (fox-base.json)';
+        legend.innerHTML = '<strong>🦊 Idle Mode:</strong> The Fox breathes calmly with active real-time mouse gaze tracking! Move your cursor everywhere on the screen to watch its eyes and head follow your pointer.';
+      } else if (state === 'thinking') {
+        engineTag.textContent = 'Fox Mascot Lottie (fox-base.json)';
+        legend.innerHTML = '<strong>🌀 Thinking Mode:</strong> The Fox displays <em>eye loading circles</em> (revolving cyan radar arcs and orbit rings directly in its eye pupils) alongside data streams!';
+      } else if (state === 'running') {
+        engineTag.textContent = 'Fox Running Lottie (fox-running.json)';
+        layers.classList.add('fox-running-active');
+        legend.innerHTML = '<strong>⚡ Running Task Mode:</strong> The Fox runs with animated legs (athletic stride cycle in <code>fox-running.json</code>), dynamic cadence bounce, foot dust clouds, and speed lines!';
+      } else if (state === 'success') {
+        engineTag.textContent = 'Fox Mascot Lottie (fox-base.json)';
+        layers.classList.add('fox-success-active');
+        triggerCelebration(currentSuccessVariant);
+        legend.innerHTML = '<strong>🎉 Success Mode:</strong> Multi-celebration system! Choose from <em>Confetti & Stars</em>, <em>Neon Fireworks</em>, <em>Golden Shield Aura</em>, or <em>Joy Dance Bounce</em>!';
+      } else if (state === 'error') {
+        engineTag.textContent = 'Fox Mascot Lottie (fox-base.json)';
+        layers.classList.add('fox-error-active');
+        legend.innerHTML = '<strong>❌ Error Mode:</strong> Exclamation marks <code>! !</code> flash in the Fox\'s eyes with a pulsating red warning halo, recoil shake, and alert status!';
+      }
+
+      // Update Widget
+      updateWidget(state);
+    }
+
+    // ================= SUCCESS CELEBRATION MODES =================
+    function setSuccessVariant(variant) {
+      currentSuccessVariant = variant;
+      document.querySelectorAll('.variant-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.toLowerCase().includes(variant.replace('_', ' ')));
+      });
+      if (currentState === 'success') {
+        const layers = document.getElementById('mascot-layers');
+        layers.classList.remove('fox-success-active');
+        void layers.offsetWidth;
+        layers.classList.add('fox-success-active');
+        triggerCelebration(variant);
+      }
+    }
+
+    function triggerRandomCelebration() {
+      const variants = ['confetti', 'fireworks', 'golden_shield', 'joy_dance'];
+      const pick = variants[Math.floor(Math.random() * variants.length)];
+      setSuccessVariant(pick);
+    }
+
+    function triggerCelebration(variant) {
+      const cx = fxCanvas.width / 2;
+      const cy = fxCanvas.height / 2;
+
+      if (variant === 'confetti') {
+        const colors = ['#f59e0b', '#22c55e', '#3b82f6', '#ec4899', '#8b5cf6', '#eab308', '#06b6d4'];
+        for (let i = 0; i < 60; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 3 + Math.random() * 8;
+          particles.push({
+            x: cx + (Math.random() - 0.5) * 60,
+            y: cy + (Math.random() - 0.5) * 60,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - 4,
+            size: 5 + Math.random() * 7,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            alpha: 1,
+            life: 0,
+            maxLife: 70 + Math.random() * 40,
+            shape: Math.random() > 0.4 ? 'rect' : 'star',
+            rotation: Math.random() * Math.PI,
+            rotSpeed: (Math.random() - 0.5) * 0.25,
+          });
+        }
+      } else if (variant === 'fireworks') {
+        const colors = ['#38bdf8', '#fbbf24', '#f472b6', '#34d399', '#a78bfa'];
+        for (let burst = 0; burst < 4; burst++) {
+          const bx = cx + (Math.random() - 0.5) * 140;
+          const by = cy - 40 + (Math.random() - 0.5) * 100;
+          const burstCol = colors[burst % colors.length];
+          for (let i = 0; i < 24; i++) {
+            const angle = (Math.PI * 2 * i) / 24;
+            const speed = 3.5 + Math.random() * 5;
+            particles.push({
+              x: bx,
+              y: by,
+              vx: Math.cos(angle) * speed,
+              vy: Math.sin(angle) * speed,
+              size: 4 + Math.random() * 4,
+              color: burstCol,
+              alpha: 1,
+              life: 0,
+              maxLife: 55 + Math.random() * 25,
+              shape: 'star',
+              rotation: Math.random() * Math.PI,
+              rotSpeed: 0.15,
+            });
+          }
+        }
+      } else if (variant === 'golden_shield') {
+        for (let i = 0; i < 45; i++) {
+          const angle = (Math.PI * 2 * i) / 45;
+          particles.push({
+            x: cx,
+            y: cy + 10,
+            vx: Math.cos(angle) * 4.5,
+            vy: Math.sin(angle) * 4.5,
+            size: 6 + Math.random() * 5,
+            color: '#fbbf24',
+            alpha: 1,
+            life: 0,
+            maxLife: 65,
+            shape: 'star',
+            rotation: angle,
+            rotSpeed: 0.08,
+          });
+        }
+      } else if (variant === 'joy_dance') {
+        const colors = ['#ec4899', '#f43f5e', '#a855f7', '#60a5fa'];
+        for (let i = 0; i < 40; i++) {
+          particles.push({
+            x: cx + (Math.random() - 0.5) * 80,
+            y: cy + (Math.random() - 0.5) * 80,
+            vx: (Math.random() - 0.5) * 4,
+            vy: -3 - Math.random() * 4,
+            size: 5 + Math.random() * 6,
+            color: colors[i % colors.length],
+            alpha: 1,
+            life: 0,
+            maxLife: 60 + Math.random() * 35,
+            shape: 'circle',
+            rotation: 0,
+            rotSpeed: 0,
+          });
+        }
+      }
+    }
+
+    // ================= DYNAMIC FX RENDER LOOP =================
+    function startFXEngine() {
+      function render() {
+        const w = fxCanvas.width;
+        const h = fxCanvas.height;
+        fxCtx.clearRect(0, 0, w, h);
+        const t = performance.now() / 1000;
+
+        // 1. Idle State: Smooth Fox Eye / Head Gaze Tracking
+        if (currentState === 'idle') {
+          currentGazeX += (targetGazeX - currentGazeX) * 0.12;
+          currentGazeY += (targetGazeY - currentGazeY) * 0.12;
+
+          const foxSvg = document.querySelector('#fox-lottie-container svg');
+          if (foxSvg) {
+            foxSvg.style.transform = `translate(${currentGazeX * 4.5}px, ${currentGazeY * 3.5}px) rotate(${currentGazeX * 1.5}deg)`;
+          }
+          const miniFoxSvg = document.querySelector('#mini-fox-container svg');
+          if (miniFoxSvg) {
+            miniFoxSvg.style.transform = `translate(${currentGazeX * 2.5}px, ${currentGazeY * 2}px)`;
+          }
+        } else {
+          const foxSvg = document.querySelector('#fox-lottie-container svg');
+          if (foxSvg) foxSvg.style.transform = '';
+          const miniFoxSvg = document.querySelector('#mini-fox-container svg');
+          if (miniFoxSvg) miniFoxSvg.style.transform = '';
+        }
+
+        // 2. Thinking State: Eye Loading Circles
+        if (currentState === 'thinking') {
+          renderThinkingEyeCircles(fxCtx, w, h, t);
+        }
+
+        // 3. Error State: Exclamation Mark Eyes
+        if (currentState === 'error') {
+          renderErrorExclamationEyes(fxCtx, w, h, t);
+        }
+
+        // 4. Running State: Foot Dust Puffs & Speed Lines
+        if (currentState === 'running') {
+          if (Math.random() > 0.4) {
+            particles.push({
+              x: w * 0.44 + (Math.random() - 0.5) * 24,
+              y: h * 0.78 + (Math.random() - 0.5) * 8,
+              vx: -2.5 - Math.random() * 3,
+              vy: -0.6 - Math.random() * 1.2,
+              size: 5 + Math.random() * 7,
+              color: 'rgba(245, 158, 11, 0.4)',
+              alpha: 0.8,
+              life: 0,
+              maxLife: 30 + Math.random() * 15,
+              shape: 'dust',
+            });
+          }
+          renderSpeedLines(fxCtx, w, h, t);
+        }
+
+        // 5. Update and Draw Particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.life++;
+          p.x += p.vx;
+          p.y += p.vy;
+          p.vy += 0.09;
+          const prog = p.life / p.maxLife;
+          const alpha = p.alpha * (1 - prog);
+
+          if (p.life >= p.maxLife || alpha <= 0.01) {
+            particles.splice(i, 1);
+            continue;
+          }
+
+          fxCtx.save();
+          fxCtx.globalAlpha = alpha;
+          fxCtx.fillStyle = p.color;
+
+          if (p.shape === 'rect') {
+            fxCtx.translate(p.x, p.y);
+            fxCtx.rotate((p.rotation || 0) + (p.rotSpeed || 0) * p.life);
+            fxCtx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+          } else if (p.shape === 'star') {
+            fxCtx.translate(p.x, p.y);
+            fxCtx.rotate((p.rotation || 0) + (p.rotSpeed || 0) * p.life);
+            drawStar(fxCtx, 0, 0, 5, p.size, p.size * 0.45);
+            fxCtx.fill();
+          } else if (p.shape === 'dust') {
+            fxCtx.beginPath();
+            fxCtx.arc(p.x, p.y, p.size * (1 + prog * 0.7), 0, Math.PI * 2);
+            fxCtx.fillStyle = `rgba(245, 158, 11, ${0.4 * (1 - prog)})`;
+            fxCtx.fill();
+          } else {
+            fxCtx.beginPath();
+            fxCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            fxCtx.fill();
+          }
+
+          fxCtx.restore();
+        }
+
+        requestAnimationFrame(render);
+      }
+      render();
+    }
+
+    function renderThinkingEyeCircles(ctx, w, h, t) {
+      const eyePositions = [
+        { x: w * 0.43, y: h * 0.35 },
+        { x: w * 0.60, y: h * 0.32 },
+      ];
+
+      for (const pos of eyePositions) {
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+
+        // Cyan glow halo
+        ctx.beginPath();
+        ctx.arc(0, 0, 24 + Math.sin(t * 5) * 3, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+        ctx.fill();
+
+        // Dark iris bg
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, 0, Math.PI * 2);
+        ctx.fillStyle = '#090d16';
+        ctx.shadowColor = '#38bdf8';
+        ctx.shadowBlur = 14;
+        ctx.fill();
+
+        // Rotating Loading Arc 1 (Neon Cyan)
+        ctx.lineWidth = 3.5;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = '#38bdf8';
+        ctx.beginPath();
+        const angle1 = t * 6;
+        ctx.arc(0, 0, 11, angle1, angle1 + Math.PI * 1.25);
+        ctx.stroke();
+
+        // Counter-rotating Inner Arc 2 (White)
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        const angle2 = -t * 8;
+        ctx.arc(0, 0, 6, angle2, angle2 + Math.PI * 0.9);
+        ctx.stroke();
+
+        ctx.restore();
+      }
+    }
+
+    function renderErrorExclamationEyes(ctx, w, h, t) {
+      const eyePositions = [
+        { x: w * 0.43, y: h * 0.35 },
+        { x: w * 0.60, y: h * 0.32 },
+      ];
+
+      for (const pos of eyePositions) {
+        ctx.save();
+        ctx.translate(pos.x, pos.y);
+
+        // Pulsing red alert halo
+        ctx.beginPath();
+        ctx.arc(0, 0, 26 + Math.sin(t * 8) * 4, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.35)';
+        ctx.fill();
+
+        // Red badge
+        ctx.beginPath();
+        ctx.arc(0, 0, 18, 0, Math.PI * 2);
+        ctx.fillStyle = '#ef4444';
+        ctx.shadowColor = '#ef4444';
+        ctx.shadowBlur = 16;
+        ctx.fill();
+
+        // Exclamation bar
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(0, -9);
+        ctx.lineTo(0, 2);
+        ctx.stroke();
+
+        // Exclamation dot
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(0, 9, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+    }
+
+    function renderSpeedLines(ctx, w, h, t) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+
+      for (let i = 0; i < 4; i++) {
+        const lineY = h * (0.32 + i * 0.15) + Math.sin(t * 10 + i) * 6;
+        const speed = 180 + i * 50;
+        const progress = ((t * speed) % (w * 0.65));
+        const lineX = w * 0.85 - progress;
+        const lineLen = 35 + (i % 2) * 25;
+
+        ctx.beginPath();
+        ctx.moveTo(lineX, lineY);
+        ctx.lineTo(lineX - lineLen, lineY);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawStar(ctx, cx, cy, spikes, outerR, innerR) {
+      let rot = (Math.PI / 2) * 3;
+      let x = cx, y = cy;
+      const step = Math.PI / spikes;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - outerR);
+      for (let i = 0; i < spikes; i++) {
+        x = cx + Math.cos(rot) * outerR;
+        y = cy + Math.sin(rot) * outerR;
+        ctx.lineTo(x, y);
+        rot += step;
+        x = cx + Math.cos(rot) * innerR;
+        y = cy + Math.sin(rot) * innerR;
+        ctx.lineTo(x, y);
+        rot += step;
+      }
+      ctx.lineTo(cx, cy - outerR);
+      ctx.closePath();
+    }
+
+    // ================= TASK PROGRESS WIDGET =================
+    const taskDefs = [
+      { id: 'extract', name: 'DOM Perception & Screen Scan' },
+      { id: 'kavach', name: 'KAVACH Privacy Sanitization' },
+      { id: 'reason', name: 'Agent Grounding & Planning' },
+      { id: 'execute', name: 'Browser Action Execution' },
+    ];
+
+    function updateWidget(state) {
+      const dot = document.getElementById('status-dot');
+      dot.className = 'status-dot ' + state;
+
+      const titles = {
+        idle: 'Awaiting user goal...',
+        thinking: 'Evaluating page & sanitizing PII...',
+        running: 'Executing browser automation...',
+        success: 'Goal completed with 0 PII leaks!',
+        error: 'Execution halted — check log details',
+      };
+      document.getElementById('widget-status').textContent = titles[state];
+
+      const goals = {
+        idle: 'Vision Assistant Idle',
+        thinking: 'Analyze flight checkout page safely',
+        running: 'Click "Confirm Booking" on Cleartrip',
+        success: 'Flight booked successfully',
+        error: 'Element not found on page',
+      };
+      document.getElementById('goal-text').textContent = goals[state];
+
+      const statuses = {
+        idle: ['pending', 'pending', 'pending', 'pending'],
+        thinking: ['done', 'active', 'pending', 'pending'],
+        running: ['done', 'done', 'active', 'pending'],
+        success: ['done', 'done', 'done', 'done'],
+        error: ['done', 'done', 'done', 'failed'],
+      };
+
+      const details = {
+        idle: ['', '', '', ''],
+        thinking: ['DOM element tree indexed', 'Sanitizing 14 form inputs...', '', ''],
+        running: ['DOM element tree indexed', '18 tokens protected by KAVACH', 'Running action...', ''],
+        success: ['DOM tree indexed', '24 tokens safely masked', 'Action verified', 'Completed successfully!'],
+        error: ['DOM tree indexed', '7 tokens protected', 'Plan created', 'Selector #submit-btn not found'],
+      };
+
+      const list = document.getElementById('task-list');
+      const s = statuses[state];
+      const d = details[state];
+
+      list.innerHTML = taskDefs.map((task, i) => `
+        <div class="task-item ${s[i] === 'active' ? 'active' : s[i] === 'done' ? 'done' : s[i] === 'failed' ? 'failed' : ''}">
+          <div class="progress-circle">
+            ${renderCircle(s[i])}
+          </div>
+          <div style="flex: 1; overflow: hidden;">
+            <div class="task-name">${i + 1}. ${task.name}</div>
+            ${d[i] ? `<div class="task-detail">${d[i]}</div>` : ''}
+          </div>
+        </div>
+      `).join('');
+
+      const redCounts = { idle: 0, thinking: 14, running: 18, success: 24, error: 7 };
+      document.getElementById('redaction-count').textContent = redCounts[state];
+
+      const steps = { idle: 0, thinking: 1, running: 2, success: 4, error: 3 };
+      document.getElementById('step-num').textContent = steps[state];
+    }
+
+    function renderCircle(status) {
+      const r = 9, c = 2 * Math.PI * r;
+      if (status === 'done') {
+        return `<svg viewBox="0 0 22 22"><circle cx="11" cy="11" r="9" class="check-circle"/><path d="M6.5 11.5l3 3 6-6.5" class="check-path"/></svg>`;
+      }
+      if (status === 'active') {
+        return `<svg viewBox="0 0 22 22"><circle cx="11" cy="11" r="${r}" class="progress-track"/><circle cx="11" cy="11" r="${r}" class="progress-bar spinning" style="stroke-dasharray:${c};stroke-dashoffset:${c * 0.35}"/></svg>`;
+      }
+      if (status === 'failed') {
+        return `<svg viewBox="0 0 22 22"><circle cx="11" cy="11" r="9" class="fail-circle"/><line x1="11" y1="6" x2="11" y2="12" class="fail-line"/><circle cx="11" cy="15" r="1.2" fill="#fff"/></svg>`;
+      }
+      return `<svg viewBox="0 0 22 22"><circle cx="11" cy="11" r="${r}" class="pending-circle"/></svg>`;
+    }
+
+    // ================= MOUSE CURSOR TRACKING =================
+    document.addEventListener('mousemove', (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+
+      const viewport = document.getElementById('mascot-viewport');
+      if (viewport) {
+        const rect = viewport.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height * 0.45;
+        const dx = mouseX - cx;
+        const dy = mouseY - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const maxD = 650;
+        const scale = Math.min(dist, maxD) / maxD;
+
+        targetGazeX = dist > 0 ? (dx / dist) * scale : 0;
+        targetGazeY = dist > 0 ? (dy / dist) * scale : 0;
+      }
+    });
+
+    // ================= FLOATING MASCOT DRAG & TOGGLE =================
+    const floatingEl = document.getElementById('floating-mascot');
+    let isDragging = false;
+    let dragStartX = 0, dragStartY = 0;
+    let initialX = 0, initialY = 0;
+
+    floatingEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      isDragging = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      const rect = floatingEl.getBoundingClientRect();
+      initialX = rect.left;
+      initialY = rect.top;
+      floatingEl.classList.add('dragging');
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      floatingEl.style.left = `${Math.max(10, initialX + dx)}px`;
+      floatingEl.style.top = `${Math.max(10, initialY + dy)}px`;
+      floatingEl.style.right = 'auto';
+      floatingEl.style.bottom = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        floatingEl.classList.remove('dragging');
+      }
+    });
+
+    function toggleFloatingWidget() {
+      const isHidden = floatingEl.style.display === 'none';
+      floatingEl.style.display = isHidden ? 'flex' : 'none';
+      document.getElementById('floating-toggle-text').textContent =
+        isHidden ? '✨ Hide Floating Mascot Overlay' : '✨ Show Floating Mascot Overlay';
+    }
+
+    // ================= INITIALIZATION =================
+    window.addEventListener('DOMContentLoaded', () => {
+      startFXEngine();
+      setState('idle');
+    });
+  </script>
+</body>
+</html>

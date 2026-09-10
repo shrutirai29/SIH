@@ -101,6 +101,21 @@ async function buildModules() {
 async function buildContent() {
   await build({
     ...common,
+    plugins: [
+      react(),
+      {
+        name: 'strip-xhr-from-content',
+        transform(code) {
+          if (code.includes('XMLHttpRequest')) {
+            return code.replace(
+              /new\s+XMLHttpRequest\s*\(\s*\)/g,
+              '(()=>{throw new Error("XHR forbidden in content script")})()',
+            );
+          }
+          return null;
+        },
+      },
+    ],
     build: {
       outDir,
       emptyOutDir: false,
@@ -183,6 +198,25 @@ async function copyNetraAssets() {
   );
 }
 
+/**
+ * Copies animation assets (Rive mascot & Lottie files) into the extension package.
+ */
+async function copyAnimationAssets() {
+  const animAssets = resolve(root, 'assets/animations');
+  try {
+    await cp(
+      animAssets,
+      resolve(outDir, 'assets/animations'),
+      {
+        recursive: true,
+        force: true,
+      },
+    );
+  } catch (err) {
+    console.warn('Animation assets copy warning:', err.message);
+  }
+}
+
 /** A 128px placeholder icon so the manifest reference resolves. Replaced in Phase 7. */
 async function writeIcon() {
   // 1x1 transparent PNG, scaled by the browser. Deliberately not a real asset yet.
@@ -199,6 +233,7 @@ async function run() {
   await flattenHtml();
   await cleanNested();
   await copyNetraAssets();
+  await copyAnimationAssets();
   await writeManifest();
   await writeIcon();
   console.log('built ' + target + ' -> ' + outDir);
