@@ -457,3 +457,106 @@ def test_preserves_unicode_redaction_tokens_in_fenced_content() -> None:
     assert "⟦EMAIL_0⟧" in prompt
     assert r"\u27e6" not in prompt
 
+
+
+# --------------------------------------------------- what the first G7 run found
+#
+# Both of these were accepted on the first attempt by the validator that ran the
+# 37/40 suite, which is why they cost three tasks rather than three retries.
+
+
+def test_rejects_a_plan_that_does_nothing_and_is_not_finished() -> None:
+    """`actions: []` with `done: false` is a stall dressed as a success.
+
+    Two tasks in the first G7 run failed exactly this way. The client has nothing to
+    execute, the step is spent, and the next step arrives at the same screen - so the
+    loop makes no progress while every layer reports success.
+    """
+    complaint = validator()(
+        {"plan_id": "p_0", "trace_id": "t_1", "actions": [], "done": False}
+    )
+    assert complaint is not None
+    assert "empty" in complaint
+    # The correction has to name the ways out, or the retry produces the same nothing.
+    for way_out in ("ask_user", "fail", "done"):
+        assert way_out in complaint
+
+
+def test_an_empty_plan_is_fine_once_the_goal_is_met() -> None:
+    """Stopping is allowed. Stopping silently is what is not."""
+    assert (
+        validator()({"plan_id": "p_0", "trace_id": "t_1", "actions": [], "done": True})
+        is None
+    )
+
+
+def test_rejects_an_action_the_element_cannot_perform() -> None:
+    """A disabled Submit is listed with an empty `actionable`, and HASTA refuses it.
+
+    The first G7 run clicked one on `form-03`, with the checkbox that would have
+    enabled it listed as clickable on the same screen.
+    """
+    screen = ssg()
+    screen["elements"][2]["actionable"] = []  # the page disabled Submit
+    complaint = make_validator(screen, plan_schema_validate)(
+        {
+            "plan_id": "p_0",
+            "trace_id": "t_1",
+            "actions": [{"op": "click", "target": "e3", "risk": "high"}],
+            "done": False,
+        }
+    )
+    assert complaint is not None
+    assert "not actionable at all" in complaint
+
+
+def test_rejects_typing_into_something_that_only_takes_a_click() -> None:
+    complaint = validator()(
+        {
+            "plan_id": "p_0",
+            "trace_id": "t_1",
+            "actions": [{"op": "type", "target": "e3", "value_ref": "⟦AADHAAR_1⟧"}],
+            "done": False,
+        }
+    )
+    assert complaint is not None
+    assert "cannot be typed" in complaint
+    assert "click" in complaint  # what it CAN do
+
+
+def test_an_element_that_never_declared_its_capabilities_is_left_alone() -> None:
+    """Absent is not the same as forbidden.
+
+    Not every client build fills `actionable` in, and a validator that treated a
+    missing field as a prohibition would reject every plan against those screens.
+    """
+    screen = ssg()
+    del screen["elements"][2]["actionable"]
+    assert (
+        make_validator(screen, plan_schema_validate)(
+            {
+                "plan_id": "p_0",
+                "trace_id": "t_1",
+                "actions": [{"op": "click", "target": "e3", "risk": "high"}],
+                "done": False,
+            }
+        )
+        is None
+    )
+
+
+def test_scrolling_to_an_inert_element_is_still_allowed() -> None:
+    """Scrolling to something is not interacting with it."""
+    screen = ssg()
+    screen["elements"][2]["actionable"] = []
+    assert (
+        make_validator(screen, plan_schema_validate)(
+            {
+                "plan_id": "p_0",
+                "trace_id": "t_1",
+                "actions": [{"op": "scroll", "direction": "to_element", "target": "e3"}],
+                "done": False,
+            }
+        )
+        is None
+    )
