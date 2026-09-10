@@ -33,8 +33,6 @@ function resolve(target: Target | undefined): Element | null {
 function liveRisk(el: Element | null, action: Action): Risk {
   if (el === null) return 'safe';
 
-  if (el instanceof HTMLInputElement && el.type === 'password') return 'high';
-
   if (action.op === 'click') {
     const isSubmit =
       (el instanceof HTMLInputElement && el.type === 'submit') ||
@@ -52,7 +50,9 @@ function liveRisk(el: Element | null, action: Action): Risk {
     return 'medium';
   }
 
-  if (action.op === 'type') return 'medium';
+  if (action.op === 'type') {
+    return 'medium';
+  }
   if (action.op === 'navigate') return 'high';
   return 'safe';
 }

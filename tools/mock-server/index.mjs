@@ -187,11 +187,22 @@ function heuristicDynamicPlan(ssg) {
     (el) => el.role === 'button' || el.tag === 'button' || el.actionable?.includes('click'),
   );
 
+  const tokensInGoal = [];
+  const tokenRegex = /⟦([A-Z0-9_]+)⟧/g;
+  let mToken;
+  while ((mToken = tokenRegex.exec(goal)) !== null) {
+    tokensInGoal.push({ token: mToken[0], cls: mToken[1] });
+  }
+
+  const emailTokenInGoal = tokensInGoal.find((t) => t.cls.includes('EMAIL'))?.token || null;
+  const phoneTokenInGoal = tokensInGoal.find((t) => t.cls.includes('PHONE') || t.cls.includes('MOBILE'))?.token || null;
+  const passTokenInGoal = tokensInGoal.find((t) => t.cls.includes('REDACTED') || t.cls.includes('PASS') || t.cls.includes('SECRET'))?.token || null;
+
   const emailTokenMatch = /⟦(?!REDACTED_)[A-Z0-9_]*EMAIL[A-Z0-9_]*⟧/.exec(JSON.stringify(elements));
-  const emailToken = emailTokenMatch ? emailTokenMatch[0] : null;
+  const emailToken = emailTokenMatch ? emailTokenMatch[0] : emailTokenInGoal;
 
   const phoneTokenMatch = /⟦(?!REDACTED_)[A-Z0-9_]*(?:PHONE|MOBILE|CONTACT)[A-Z0-9_]*⟧/.exec(JSON.stringify(elements));
-  const phoneToken = phoneTokenMatch ? phoneTokenMatch[0] : null;
+  const phoneToken = phoneTokenMatch ? phoneTokenMatch[0] : phoneTokenInGoal;
 
   const defaultFallbackValues = {
     name: 'Asha Ramesh Patil',
@@ -216,19 +227,27 @@ function heuristicDynamicPlan(ssg) {
 
   const userExtractions = {};
 
-  // Extract from goal prompt (explicit user instruction)
-  const namePromptMatch = /(?:name|fullname|applicant)\s*(?:is|as|=|:)?\s*([A-Za-z\s]{2,30}?)(?=[,\.]|\sand\s|email|phone|mobile|roll|number|date|\[|$)/i.exec(goal);
-  if (namePromptMatch) userExtractions.name = namePromptMatch[1].trim();
-
-  const rollPromptMatch = /(?:roll|number|num|id|no|enrollment)\s*(?:is|as|=|:)?\s*([0-9A-Za-z]+)/i.exec(goal);
-  if (rollPromptMatch) userExtractions.roll = rollPromptMatch[1].trim();
-
+  // Extract email from goal prompt (explicit user instruction)
   const emailPromptMatch = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i.exec(goal);
   if (emailPromptMatch) userExtractions.email = emailPromptMatch[1].trim();
 
+  // Extract password from goal prompt
+  const passPromptMatch = /(?:password|pass|pwd|code|secret)\s*(?:is|as|=|:)?\s*([^\s,]+)/i.exec(goal);
+  if (passPromptMatch) userExtractions.password = passPromptMatch[1].trim();
+
+  // Extract name from goal prompt
+  const namePromptMatch = /(?:name|fullname|applicant)\s*(?:is|as|=|:)?\s*([A-Za-z\s]{2,30}?)(?=[,\.]|\sand\s|email|phone|mobile|pass|date|\[|$)/i.exec(goal);
+  if (namePromptMatch) userExtractions.name = namePromptMatch[1].trim();
+
+  // Extract phone/mobile from goal prompt
   const phonePromptMatch = /(?:\+?91[\s-]?)?([6-9][0-9]{9})\b/.exec(goal);
   if (phonePromptMatch) userExtractions.mobile = phonePromptMatch[1].trim();
 
+  // Extract roll/enrollment from goal prompt
+  const rollPromptMatch = /(?:roll|number|num|id|no|enrollment)\s*(?:is|as|=|:)?\s*([0-9A-Za-z]+)/i.exec(goal);
+  if (rollPromptMatch) userExtractions.roll = rollPromptMatch[1].trim();
+
+  // Extract date/dob from goal prompt
   const datePromptMatch = /(?:date|dob)\s*(?:is|as|=|:)?\s*([0-9]{1,4}[\s/-][0-9]{1,2}[\s/-][0-9]{2,4}|[0-9]{6,8})/i.exec(goal);
   if (datePromptMatch) {
     const rawD = datePromptMatch[1].trim();
@@ -306,16 +325,28 @@ function heuristicDynamicPlan(ssg) {
           risk: 'medium',
         });
       } else if (labelText.includes('email') || labelText.includes('mail')) {
-        if (emailToken) {
+        if (userExtractions.email) {
+          actions.push({ op: 'type', target: el.id, value: userExtractions.email, clear_first: true, risk: 'safe' });
+        } else if (emailToken) {
           actions.push({ op: 'type', target: el.id, value_ref: emailToken, clear_first: true, risk: 'medium' });
         } else {
-          actions.push({ op: 'type', target: el.id, value: userExtractions.email || defaultFallbackValues.email, clear_first: true, risk: 'safe' });
+          actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.email, clear_first: true, risk: 'safe' });
+        }
+      } else if (labelText.includes('password') || labelText.includes('pass')) {
+        if (userExtractions.password) {
+          actions.push({ op: 'type', target: el.id, value: userExtractions.password, clear_first: true, risk: 'safe' });
+        } else if (passTokenInGoal) {
+          actions.push({ op: 'type', target: el.id, value_ref: passTokenInGoal, clear_first: true, risk: 'medium' });
+        } else {
+          actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.password, clear_first: true, risk: 'safe' });
         }
       } else if (labelText.includes('mobile') || labelText.includes('phone') || labelText.includes('contact') || labelText.includes('tel')) {
-        if (phoneToken) {
+        if (userExtractions.mobile) {
+          actions.push({ op: 'type', target: el.id, value: userExtractions.mobile, clear_first: true, risk: 'safe' });
+        } else if (phoneToken) {
           actions.push({ op: 'type', target: el.id, value_ref: phoneToken, clear_first: true, risk: 'medium' });
         } else {
-          actions.push({ op: 'type', target: el.id, value: userExtractions.mobile || defaultFallbackValues.mobile, clear_first: true, risk: 'safe' });
+          actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.mobile, clear_first: true, risk: 'safe' });
         }
       } else if (labelText.includes('name') || labelText.includes('fullname') || labelText.includes('applicant')) {
         actions.push({ op: 'type', target: el.id, value: userExtractions.name || defaultFallbackValues.name, clear_first: true, risk: 'safe' });
@@ -337,8 +368,6 @@ function heuristicDynamicPlan(ssg) {
         actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.aadhaar, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('user') || labelText.includes('userid')) {
         actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.userid, clear_first: true, risk: 'safe' });
-      } else if (labelText.includes('password') || labelText.includes('pass')) {
-        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.password, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('otp')) {
         actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.otp, clear_first: true, risk: 'safe' });
       }
