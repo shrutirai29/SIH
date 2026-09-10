@@ -49,31 +49,35 @@ export class TaskProgressWidget {
 
   private syncTasksFromAgentState(state: Partial<AgentState>): void {
     const taskList: MascotTaskItem[] = [];
+    const phase = state.phase ?? 'idle';
+    const step = state.step ?? 0;
+    const redactionCount = state.redactionCount ?? 0;
+    const message = state.message ?? '';
 
     taskList.push({
       id: 'step-extract',
       label: 'DOM Perception',
       status:
-        state.phase === 'observing'
+        phase === 'observing'
           ? 'in_progress'
-          : state.step > 0 || state.phase !== 'idle'
+          : step > 0 || phase !== 'idle'
             ? 'completed'
             : 'pending',
-      detail: state.phase === 'observing' ? 'Analyzing DOM...' : 'DOM Extracted',
+      detail: phase === 'observing' ? 'Analyzing DOM...' : 'DOM Extracted',
     });
 
     taskList.push({
       id: 'step-kavach',
       label: 'Privacy Guard',
       status:
-        state.phase === 'sanitizing'
+        phase === 'sanitizing'
           ? 'in_progress'
-          : ['sending', 'thinking', 'acting', 'done'].includes(state.phase) || state.redactionCount > 0
+          : ['sending', 'thinking', 'acting', 'done'].includes(phase) || redactionCount > 0
             ? 'completed'
             : 'pending',
       detail:
-        state.redactionCount > 0
-          ? `${state.redactionCount} Tokenised`
+        redactionCount > 0
+          ? `${redactionCount} Tokenised`
           : '0 PII Leaked',
     });
 
@@ -81,17 +85,17 @@ export class TaskProgressWidget {
       id: 'step-reasoning',
       label: 'AI Reasoning',
       status:
-        ['sending', 'thinking'].includes(state.phase)
+        ['sending', 'thinking'].includes(phase)
           ? 'in_progress'
-          : state.phase === 'acting' || state.phase === 'done'
+          : phase === 'acting' || phase === 'done'
             ? 'completed'
-            : state.phase === 'asking'
+            : phase === 'asking'
               ? 'in_progress'
               : 'pending',
       detail:
-        state.phase === 'thinking'
+        phase === 'thinking'
           ? 'Generating plan...'
-          : state.phase === 'asking'
+          : phase === 'asking'
             ? 'Awaiting input'
             : 'Planner Standby',
     });
@@ -100,14 +104,14 @@ export class TaskProgressWidget {
       id: 'step-execution',
       label: 'Action Exec',
       status:
-        state.phase === 'acting' || state.phase === 'asking'
+        phase === 'acting' || phase === 'asking'
           ? 'in_progress'
-          : state.phase === 'done'
+          : phase === 'done'
             ? 'completed'
-            : state.phase === 'error' || state.phase === 'blocked'
+            : phase === 'error' || phase === 'blocked'
               ? 'failed'
               : 'pending',
-      detail: state.message || (state.phase === 'done' ? 'Goal Finished' : 'Ready for prompt'),
+      detail: message || (phase === 'done' ? 'Goal Finished' : 'Ready for prompt'),
     });
 
     this.tasks = taskList;
