@@ -162,6 +162,13 @@ async function callLlmPlanner(ssg) {
   }
 }
 
+function pageContextInfo(ssg) {
+  const rawTitle = (ssg?.page?.title || '').trim();
+  const pageTitle = rawTitle.length > 0 ? `"${rawTitle}"` : 'the current page';
+  const stepNum = typeof ssg?.step === 'number' ? ssg.step + 1 : 1;
+  return `On page ${pageTitle} (Step ${stepNum})`;
+}
+
 /**
  * Dynamic heuristic fallback parser if LLM network is offline or slow:
  * Parses user goal to fill form fields instantly with smart matching & conversational inquiries.
@@ -172,6 +179,7 @@ function heuristicDynamicPlan(ssg) {
   const elements = ssg?.elements ?? [];
   const autoFillPrefilled = ssg?.auto_fill_prefilled !== false;
   const noSubmit = /don['’]?t\s*(?:submit|send|apply)|do\s*not\s*(?:submit|send|apply)|without\s*(?:submitting|submit|sending|applying)|no\s*submit|only\s*fill|fill\s*only|save\s*draft/i.test(goal);
+  const askIfUnknown = /ask\s*(?:me|user)?|confirm\s*(?:with\s*me|first)?|check\s*(?:with\s*me)?/i.test(goal);
 
   const textboxes = elements.filter(
     (el) =>
@@ -342,12 +350,14 @@ function heuristicDynamicPlan(ssg) {
 
   if (step === 0 && textboxes.length > 0) {
     const actions = [];
+    const missingFields = [];
 
     for (let idx = 0; idx < textboxes.length; idx++) {
       const el = textboxes[idx];
       const labelText = `${el.name || ''} ${el.placeholder || ''} ${el.ariaLabel || ''} ${el.id || ''} ${el.value || ''}`.toLowerCase();
       const rawStr = JSON.stringify(el);
       const tokenMatch = /⟦(?!REDACTED_)[A-Z0-9_]+⟧/.exec(rawStr);
+      const readableFieldName = el.name || el.placeholder || el.ariaLabel || `Field #${idx + 1}`;
 
       if (tokenMatch) {
         actions.push({
@@ -403,7 +413,29 @@ function heuristicDynamicPlan(ssg) {
         actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.userid, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('otp')) {
         actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.otp, clear_first: true, risk: 'safe' });
+      } else {
+        missingFields.push(readableFieldName);
       }
+    }
+
+    // If user requested to ask on unknown fields, or if an unknown field cannot be matched
+    if (askIfUnknown && missingFields.length > 0) {
+      const fieldList = missingFields.slice(0, 3).join(', ');
+      const ctx = pageContextInfo(ssg);
+      return {
+        plan_id: 'p_0',
+        trace_id: ssg?.trace_id ?? 't_0',
+        reasoning: `${ctx}: Found unknown form field(s) (${fieldList}). Inquiring user for input.`,
+        actions: [
+          {
+            op: 'ask_user',
+            question: `${ctx}: I see form field(s) '${fieldList}', but I'm unsure what value to fill. What value would you like me to enter?`,
+          },
+        ],
+        expect: { page_change: false },
+        done: false,
+        confidence: 0.8,
+      };
     }
 
     // Auto-click terms / consent / agreement checkboxes
