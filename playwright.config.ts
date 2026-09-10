@@ -35,7 +35,7 @@ export default defineConfig({
    */
   webServer: {
     command: 'node tools/mock-server/index.mjs',
-    url: 'http://127.0.0.1:8080/v1/health',
+    url: 'http://127.0.0.1:8000/v1/health',
     reuseExistingServer: true,
     timeout: 30_000,
     stdout: 'ignore',

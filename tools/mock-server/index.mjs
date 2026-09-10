@@ -37,7 +37,7 @@ if (existsSync(envPath)) {
   }
 }
 
-const PORT = Number(process.env.PORT ?? 8080);
+const PORT = Number(process.env.PORT ?? 8000);
 
 const SYSTEM_PROMPT = `You are MANTRI, the AI browser agent planner for PRAHARI.
 Your task is to take the user's real goal and the sanitized screen elements, and output an action plan in JSON.
