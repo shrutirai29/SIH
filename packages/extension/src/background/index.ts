@@ -33,14 +33,13 @@ browser.runtime.onConnect.addListener((port) => {
 
 /* ------------------------------------------------------------- request handling */
 
-browser.runtime.onMessage.addListener((raw: unknown, sender?: { tab?: { id?: number } }): Promise<unknown> | undefined => {
+browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefined => {
   const msg = raw as Request | undefined;
   if (msg === undefined || typeof msg.kind !== 'string') return undefined;
 
   switch (msg.kind) {
     case 'START_TASK':
-      console.log('[PRAHARI Background] START_TASK received:', msg.goal, 'tabId:', sender?.tab?.id);
-      return loop.start(msg.goal, sender?.tab?.id);
+      return loop.start(msg.goal);
 
     case 'STOP_TASK':
       loop.stop();

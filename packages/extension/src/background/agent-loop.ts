@@ -70,7 +70,6 @@ export class AgentLoop {
   #state: AgentState = freshState();
   #abort: AbortController | null = null;
   #listeners = new Set<(s: AgentState) => void>();
-  #pinnedTabId: number | null = null;
 
   readonly ledger: Ledger;
   /** Exact bytes of recent steps, memory only, for the diff viewer (ticket D16). */
@@ -110,15 +109,13 @@ export class AgentLoop {
   stop(reason = 'Stopped by user.'): void {
     this.#abort?.abort();
     this.#abort = null;
-    this.#pinnedTabId = null;
     // ARCHITECTURE.md sec 10: the kept artefacts are dropped at session end.
     this.transmissions.clear();
     this.#patch({ phase: 'idle', message: reason });
   }
 
-  async start(goal: string, tabId?: number): Promise<AgentState> {
+  async start(goal: string): Promise<AgentState> {
     if (this.#abort !== null) this.stop('Restarting.');
-    this.#pinnedTabId = tabId ?? null;
 
   // Start a fresh session. Remove temporary payload data
   // from the previous session.
@@ -410,20 +407,52 @@ export class AgentLoop {
   }
 
   async #activeTabId(): Promise<number> {
-    if (this.#pinnedTabId !== null) {
-      try {
-        const tab = await browser.tabs.get(this.#pinnedTabId);
-        if (tab?.id !== undefined) return tab.id;
-      } catch {
-        this.#pinnedTabId = null;
-      }
-    }
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    const id = tab?.id;
-    if (id !== undefined) return id;
+    const isNonWeb = (t?: { id?: number; url?: string }): boolean => {
+      if (!t || t.id === undefined) return true;
+      if (!t.url) return false;
+      const u = t.url;
+      return (
+        u.startsWith('chrome-extension://') ||
+        u.startsWith('moz-extension://') ||
+        u.startsWith('chrome://') ||
+        u.startsWith('about:') ||
+        u.startsWith('edge://')
+      );
+    };
 
-    const [anyActiveTab] = await browser.tabs.query({ active: true });
-    if (anyActiveTab?.id !== undefined) return anyActiveTab.id;
+    // 1. Current window active tab (fast path for normal extension usage)
+    try {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id !== undefined && !isNonWeb(tab)) return tab.id;
+    } catch {
+      // ignore
+    }
+
+    // 2. Active tab across any window that is a real webpage
+    try {
+      const activeTabs = await browser.tabs.query({ active: true });
+      const webActive = activeTabs.find((t) => !isNonWeb(t));
+      if (webActive?.id !== undefined) return webActive.id;
+    } catch {
+      // ignore
+    }
+
+    // 3. Fallback: search all tabs across windows for any web tab
+    try {
+      const allTabs = await browser.tabs.query({});
+      const webTab = allTabs.find((t) => !isNonWeb(t));
+      if (webTab?.id !== undefined) return webTab.id;
+    } catch {
+      // ignore
+    }
+
+    // 4. Ultimate fallback: active tab in current window even if URL not matched
+    try {
+      const [fallback] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (fallback?.id !== undefined) return fallback.id;
+    } catch {
+      // ignore
+    }
 
     throw new Error('no active tab');
   }
