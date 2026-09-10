@@ -88,6 +88,7 @@ export interface HistoryItem {
   action: string;
   target?: string;
   outcome: Outcome;
+  reason_code?: string;
 }
 
 export interface RedactionManifest {

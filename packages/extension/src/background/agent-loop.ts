@@ -8,12 +8,14 @@
  * wrong, and sending it again would only be wrong again.
  */
 
-import type { Action, ActionPlan, HistoryItem, RedactedText, SSG } from '@prahari/ssg';
+import type { Action, ActionOp, ActionPlan, HistoryItem, Outcome, RedactedText, Risk, SSG } from '@prahari/ssg';
 import {
   Ledger,
   MemoryLedgerStore,
   createEgressGuard,
+  normalizeReasonCode,
   type EgressGuard,
+  type SanitizedReasonCode,
 } from '@prahari/kavach';
 import { CONFIG } from '../shared/config.js';
 import type {
@@ -182,8 +184,33 @@ async start(goal: string): Promise<AgentState> {
 }
       if (signal.aborted || this.#isTerminal()) return;
 
-      if (history.length > 0) {
-        extract.ssg.history = [...history];
+      // ---- history integration from LEKHA (durable, privacy-safe context for MANTRI)
+      try {
+        const sanitizedHistory = await this.ledger.getSanitizedHistory({
+          sessionId,
+          maxItems: 20,
+        });
+        const actionHistory = sanitizedHistory.filter(
+          (item) => item.event_type === 'action' || item.event_type === 'lifecycle',
+        );
+        if (actionHistory.length > 0) {
+          extract.ssg.history = actionHistory.map((item) => ({
+            step: item.step ?? 0,
+            action:
+              item.action_op ??
+              (item.reason_code ? String(item.reason_code).toLowerCase() : item.event_type),
+            ...(item.target_id !== undefined ? { target: item.target_id } : {}),
+            outcome: item.action_outcome ?? 'no_change',
+            ...(item.reason_code !== undefined ? { reason_code: item.reason_code } : {}),
+          }));
+        } else if (history.length > 0) {
+          extract.ssg.history = [...history];
+        }
+      } catch (err) {
+        console.warn('LEKHA getSanitizedHistory failed, falling back to in-memory history:', err);
+        if (history.length > 0) {
+          extract.ssg.history = [...history];
+        }
       }
 
       let imageBlob: Blob | undefined = undefined;
@@ -318,12 +345,17 @@ async start(goal: string): Promise<AgentState> {
       // ---- act -----------------------------------------------------------------
       const plan: ActionPlan = result.plan;
       needVisual = plan.need_visual === true;
-      const outcome = await this.#actAll(plan.actions, step, history, signal);
+      const outcome = await this.#actAll(plan.actions, step, history, signal, sessionId, traceId);
       if (signal.aborted || this.#isTerminal()) return;
 
       if (plan.done || plan.actions.some((a) => a.op === 'done')) {
         const doneAction = plan.actions.find((a) => a.op === 'done');
-
+        await this.#logLifecycle({
+          sessionId,
+          traceId,
+          step,
+          reason_code: 'TASK_COMPLETE',
+        });
         this.#patch({
           phase: 'done',
           message:
@@ -345,12 +377,24 @@ async start(goal: string): Promise<AgentState> {
       if (outcome === 'error' || outcome === 'no_change') {
         consecutiveFailures++;
         if (consecutiveFailures >= MAX_CONSECUTIVE_RECOVERIES) {
+          await this.#logLifecycle({
+            sessionId,
+            traceId,
+            step,
+            reason_code: 'RECOVERY_EXHAUSTED',
+          });
           this.#patch({
             phase: 'error',
             message: 'Exceeded recovery budget (' + String(MAX_CONSECUTIVE_RECOVERIES) + ' consecutive failures). Stopping.',
           });
           return;
         }
+        await this.#logLifecycle({
+          sessionId,
+          traceId,
+          step,
+          reason_code: 'RECOVERY_STARTED',
+        });
         this.#patch({
           message: 'Action had ' + outcome + ', replanning (recovery attempt ' + String(consecutiveFailures) + '/' + String(MAX_CONSECUTIVE_RECOVERIES) + ')…',
         });
@@ -369,6 +413,8 @@ async start(goal: string): Promise<AgentState> {
     step: number,
     history: HistoryItem[],
     signal: AbortSignal,
+    sessionId: string,
+    traceId: string,
   ): Promise<ActionResult['outcome']> {
     let last: ActionResult['outcome'] = 'no_change';
     for (const action of actions) {
@@ -379,18 +425,38 @@ async start(goal: string): Promise<AgentState> {
           step,
           action: 'done',
           outcome: 'advanced',
+          reason_code: 'TASK_COMPLETE',
         });
         if (history.length > 20) history.shift();
+        await this.#logAction({
+          sessionId,
+          traceId,
+          step,
+          action_op: 'done',
+          action_outcome: 'advanced',
+          reason_code: 'TASK_COMPLETE',
+        });
         return 'advanced';
       }
 
       if (action.op === 'fail') {
+        const reason_code =
+          normalizeReasonCode(action.reason, undefined, 'error', 'action') ?? 'TASK_FAILED';
         history.push({
           step,
           action: 'fail',
           outcome: 'error',
+          reason_code,
         });
         if (history.length > 20) history.shift();
+        await this.#logAction({
+          sessionId,
+          traceId,
+          step,
+          action_op: 'fail',
+          action_outcome: 'error',
+          reason_code,
+        });
         this.#patch({
           phase: 'error',
           message: action.reason ?? 'Agent reported task failure.',
@@ -403,8 +469,17 @@ async start(goal: string): Promise<AgentState> {
           step,
           action: 'ask_user',
           outcome: 'no_change',
+          reason_code: 'USER_DECLINED',
         });
         if (history.length > 20) history.shift();
+        await this.#logAction({
+          sessionId,
+          traceId,
+          step,
+          action_op: 'ask_user',
+          action_outcome: 'no_change',
+          reason_code: 'USER_DECLINED',
+        });
 
         // TODO/DEFERRED(ask_user-resume):
         // Legitimate human interaction required. The existing AgentPhase contract
@@ -430,13 +505,28 @@ async start(goal: string): Promise<AgentState> {
           ? (action as { target: string }).target.slice(0, 16)
           : undefined;
 
+      const risk: Risk = 'risk' in action && action.risk !== undefined ? action.risk : 'safe';
+      const reason_code = normalizeReasonCode(undefined, res.detail, res.outcome, 'action');
+
       history.push({
         step,
         action: action.op,
         ...(target !== undefined ? { target } : {}),
         outcome: res.outcome,
+        ...(reason_code !== undefined ? { reason_code } : {}),
       });
       if (history.length > 20) history.shift();
+
+      await this.#logAction({
+        sessionId,
+        traceId,
+        step,
+        action_op: action.op,
+        ...(target !== undefined ? { target_id: target } : {}),
+        action_outcome: res.outcome,
+        ...(risk !== undefined ? { risk } : {}),
+        ...(reason_code !== undefined ? { reason_code } : {}),
+      });
 
       // A refused action is the system defending itself; the user must see WHY
       if (res.outcome === 'blocked') {
@@ -494,6 +584,53 @@ async start(goal: string): Promise<AgentState> {
       return reply ?? { outcome: 'error', detail: 'no reply' };
     } catch (err) {
       return { outcome: 'error', detail: errName(err) };
+    }
+  }
+
+  async #logAction(input: {
+    sessionId: string;
+    traceId: string;
+    step: number;
+    action_op: ActionOp;
+    target_id?: string;
+    action_outcome: Outcome;
+    risk?: Risk;
+    reason_code?: SanitizedReasonCode;
+  }): Promise<void> {
+    try {
+      await this.ledger.append({
+        event_type: 'action',
+        session_id: input.sessionId,
+        trace_id: input.traceId,
+        step: input.step,
+        action_op: input.action_op,
+        ...(input.target_id !== undefined ? { target_id: input.target_id } : {}),
+        action_outcome: input.action_outcome,
+        ...(input.risk !== undefined ? { risk: input.risk } : {}),
+        ...(input.reason_code !== undefined ? { reason_code: input.reason_code } : {}),
+      });
+    } catch (err) {
+      // Diagnostic logging failure must not fail browser action or task execution (RULES.md P6/P8 fail-safe for action logs)
+      console.warn('LEKHA action logging failed:', err);
+    }
+  }
+
+  async #logLifecycle(input: {
+    sessionId: string;
+    traceId: string;
+    step: number;
+    reason_code: SanitizedReasonCode;
+  }): Promise<void> {
+    try {
+      await this.ledger.append({
+        event_type: 'lifecycle',
+        session_id: input.sessionId,
+        trace_id: input.traceId,
+        step: input.step,
+        reason_code: input.reason_code,
+      });
+    } catch (err) {
+      console.warn('LEKHA lifecycle logging failed:', err);
     }
   }
 
@@ -608,6 +745,12 @@ async start(goal: string): Promise<AgentState> {
     });
 
     return { passed: checks.every((c) => c.ok), checks };
+  }
+
+  /** Clears the privacy ledger storage, resetting to an empty genesis state. */
+  async clearLedger(): Promise<{ ok: boolean }> {
+    await this.ledger.clear();
+    return { ok: true };
   }
 }
 

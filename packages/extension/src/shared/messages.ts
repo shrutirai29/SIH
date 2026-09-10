@@ -26,6 +26,16 @@ export interface GetState {
 export interface GetLedger {
   kind: 'GET_LEDGER';
 }
+export interface ClearLedger {
+  kind: 'CLEAR_LEDGER';
+}
+export interface VerifyLedgerResult {
+  intact: boolean;
+  brokenAt: number | null;
+}
+export interface VerifyLedger {
+  kind: 'VERIFY_LEDGER';
+}
 export interface SelfTest {
   kind: 'SELF_TEST';
 }
@@ -74,6 +84,8 @@ export type Request =
   | StopTask
   | GetState
   | GetLedger
+  | ClearLedger
+  | VerifyLedger
   | SelfTest
   | GetTransmission
   | SetOverlay
@@ -185,8 +197,12 @@ export type ResponseFor<R extends Request> = R extends StartTask | StopTask | Ge
   ? AgentState
   : R extends GetLedger
     ? LedgerEntry[]
-    : R extends RunCanaryAudit
-      ? CanaryAuditResult
+    : R extends ClearLedger
+      ? { ok: boolean }
+      : R extends VerifyLedger
+        ? VerifyLedgerResult
+        : R extends RunCanaryAudit
+          ? CanaryAuditResult
       : R extends GetTransmission
         ? TransmissionView | null
         : R extends SelfTest

@@ -49,6 +49,14 @@ browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefin
     case 'GET_LEDGER':
       return loop.ledger.list();
 
+    case 'CLEAR_LEDGER':
+      return loop.clearLedger();
+
+    case 'VERIFY_LEDGER':
+      return loop.ledger
+        .verify()
+        .then((res) => ({ intact: res === null, brokenAt: res }));
+
     case 'SELF_TEST':
       return loop.selfTest();
 
