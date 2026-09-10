@@ -453,6 +453,14 @@ export async function execute(action: Action): Promise<ActionResult> {
 
       case 'click': {
         if (el === null) return { outcome: 'error', detail: 'Target element not found on page' };
+
+        // Prevent toggling an ALREADY selected radio button or checkbox (Google Forms / custom DOM)
+        const isCheckedInput = el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio') && el.checked;
+        const isCheckedRole = (el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true');
+        if (isCheckedInput || isCheckedRole) {
+          return { outcome: 'no_change' };
+        }
+
         if (el instanceof HTMLElement) {
           el.scrollIntoView({ block: 'center' });
           await settle(80);

@@ -231,6 +231,15 @@ function heuristicDynamicPlan(ssg) {
     userid: 'asha.patil',
     password: 'hunter2-not-real',
     otp: '482915',
+    college: 'Rashtriya Raksha University',
+    university: 'Rashtriya Raksha University',
+    course: 'B.Tech Computer Science',
+    department: 'Computer Science',
+    degree: 'B.Tech',
+    year: '2024',
+    city: 'Pune',
+    state: 'Maharashtra',
+    pincode: '411005',
   };
 
   const userExtractions = {};
@@ -246,6 +255,14 @@ function heuristicDynamicPlan(ssg) {
   // Extract name from goal prompt
   const namePromptMatch = /(?:name|fullname|applicant)\s*(?:is|as|=|:)?\s*([A-Za-z\s]{2,30}?)(?=[,\.]|\sand\s|email|phone|mobile|pass|date|\[|$)/i.exec(goal);
   if (namePromptMatch) userExtractions.name = namePromptMatch[1].trim();
+
+  // Extract college from goal prompt
+  const collegePromptMatch = /(?:college|university|school|institution)\s*(?:is|as|=|:)?\s*([A-Za-z\s]{2,40}?)(?=[,\.]|\sand\s|course|branch|email|phone|mobile|pass|date|\[|$)/i.exec(goal);
+  if (collegePromptMatch) userExtractions.college = collegePromptMatch[1].trim();
+
+  // Extract course from goal prompt
+  const coursePromptMatch = /(?:course|branch|degree|department)\s*(?:is|as|=|:)?\s*([A-Za-z\s]{2,40}?)(?=[,\.]|\sand\s|college|university|email|phone|mobile|pass|date|\[|$)/i.exec(goal);
+  if (coursePromptMatch) userExtractions.course = coursePromptMatch[1].trim();
 
   // Extract phone/mobile from goal prompt
   const phonePromptMatch = /(?:\+?91[\s-]?)?([6-9][0-9]{9})\b/.exec(goal);
@@ -402,6 +419,10 @@ function heuristicDynamicPlan(ssg) {
           clear_first: true,
           risk: 'safe',
         });
+      } else if (labelText.includes('college') || labelText.includes('university') || labelText.includes('school') || labelText.includes('institution')) {
+        actions.push({ op: 'type', target: el.id, value: userExtractions.college || defaultFallbackValues.college, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('course') || labelText.includes('branch') || labelText.includes('department') || labelText.includes('degree')) {
+        actions.push({ op: 'type', target: el.id, value: userExtractions.course || defaultFallbackValues.course, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('name') || labelText.includes('fullname') || labelText.includes('applicant')) {
         actions.push({ op: 'type', target: el.id, value: userExtractions.name || defaultFallbackValues.name, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('roll') || labelText.includes('enrollment') || labelText.includes('student id')) {
