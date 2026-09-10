@@ -9,6 +9,10 @@ dependencies = [
   "pydantic>=2.9",
   "httpx>=0.27",
   "redis>=5.2",
+  # Read by the eval CLI so a key can live in `server/.env` instead of a shell
+  # export. It arrives with uvicorn[standard] anyway; declared because depending on
+  # a transitive dependency is depending on someone else's packaging decision.
+  "python-dotenv>=1.0",
 ]
 
 [dependency-groups]
@@ -19,4 +23,4 @@ line-length = 100
 
 [tool.mypy]
 strict = true
-files = ["app"]
+files = ["app", "mantri"]

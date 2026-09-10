@@ -47,10 +47,20 @@ class DecodeMode(str, Enum):
 
 @dataclass
 class LlmConfig:
-    base_url: str = os.environ.get(
-        "PRAHARI_LLM_BASE_URL", "https://openrouter.ai/api/v1"
+    # All three read the environment when the config is *constructed*, not when this
+    # module is imported. A plain default would be frozen at import, which makes a
+    # `.env` loaded by an entry point arrive too late to have any effect - and the
+    # symptom of that is a key that is plainly set and plainly ignored.
+    base_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "PRAHARI_LLM_BASE_URL", "https://openrouter.ai/api/v1"
+        )
     )
-    model: str = os.environ.get("PRAHARI_LLM_MODEL", "qwen/qwen2.5-vl-72b-instruct")
+    model: str = field(
+        default_factory=lambda: os.environ.get(
+            "PRAHARI_LLM_MODEL", "qwen/qwen2.5-vl-72b-instruct"
+        )
+    )
     api_key: str = field(
         default_factory=lambda: os.environ.get("PRAHARI_LLM_API_KEY", "")
     )
@@ -78,7 +88,19 @@ class LlmResult:
 
 
 class LlmError(RuntimeError):
-    """Never carries provider response bodies: they can echo the prompt back."""
+    """Never carries provider response bodies: they can echo the prompt back.
+
+    `complaint` is set only when the ladder was spent on *validation* failures, and
+    carries the validator's last objection - which is our own text, not the provider's.
+    A caller can then tell "the model kept producing an invalid plan" apart from "the
+    endpoint was unreachable", and those two deserve opposite responses: the first is
+    worth retrying differently (MANTRI escalates it to vision), the second is not worth
+    retrying at all.
+    """
+
+    def __init__(self, message: str, *, complaint: str | None = None) -> None:
+        super().__init__(message)
+        self.complaint = complaint
 
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
@@ -157,6 +179,8 @@ class LlmClient:
         schema: dict[str, Any],
         validate: Any,
         image_data_url: str | None = None,
+        examples: list[dict[str, Any]] | None = None,
+        model: str | None = None,
     ) -> LlmResult:
         """Asks for one action plan, escalating through the decode tiers.
 
@@ -176,10 +200,14 @@ class LlmClient:
                 {"type": "image_url", "image_url": {"url": image_data_url}},
             ]
 
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": content},
-        ]
+        # Few-shot exemplars go between the system prompt and the live screen as real
+        # alternating turns (ticket G2). A model treats a prior assistant turn as
+        # something it wrote and continues in that register; the same examples pasted
+        # into the system prompt are only text *about* the format.
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        if examples:
+            messages.extend(examples)
+        messages.append({"role": "user", "content": content})
 
         attempts = 0
         rate_limit_retries = 0
@@ -193,7 +221,7 @@ class LlmClient:
                 mode = modes[mi]
                 mi += 1
                 attempts += 1
-                body = self._body(messages, mode, schema)
+                body = self._body(messages, mode, schema, model=model)
 
                 import time
 
@@ -292,7 +320,8 @@ class LlmClient:
 
         raise LlmError(
             "no schema-valid plan after " + str(attempts) + " attempts: "
-            + (last_complaint or "unknown")
+            + (last_complaint or "unknown"),
+            complaint=last_complaint,
         )
 
     def _modes(self) -> list[DecodeMode]:
@@ -301,10 +330,14 @@ class LlmClient:
         return [DecodeMode.STRICT, DecodeMode.JSON, DecodeMode.RETRY]
 
     def _body(
-        self, messages: list[dict[str, Any]], mode: DecodeMode, schema: dict[str, Any]
+        self,
+        messages: list[dict[str, Any]],
+        mode: DecodeMode,
+        schema: dict[str, Any],
+        model: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
-            "model": self.config.model,
+            "model": model or self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,

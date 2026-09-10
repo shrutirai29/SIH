@@ -3,7 +3,8 @@
 > **The living status file.** Update it in the same commit as the work it describes.
 > Ticket IDs are from `IMPLEMENTATION-PLAN.md §8`. Phases are from `PHASEWISE.md`.
 >
-> Last updated: **2026-09-06** · **168 unit + 9 browser + 49 server tests green**
+> Last updated: **2026-09-09** · **247 unit + 9 browser + 255 server tests green**
+> (server count includes 140 MANTRI tests; see TODO-MANTRI.md)
 > New here? Read **[START-HERE.md](START-HERE.md)** first.
 >
 > `pnpm verify` now runs green from a clean checkout with nothing else open — it starts
@@ -190,8 +191,28 @@ Legend: ✅ done · 🟡 partial (scope noted) · ⬜ not started · 🚫 blocke
 | F9 | Air-gapped compose + nightly CI | ⬜ | this is how R9 stops being a claim |
 | F10 | Local fallback server | 🟡 | the Node mock covers the demo-network contingency |
 
-### EPIC G — MANTRI reasoning (SML) — all ⬜, blocked on F
+### EPIC G — MANTRI reasoning (SML) — **now a package: `server/mantri/`**
 
+Full board and honesty list: **[TODO-MANTRI.md](TODO-MANTRI.md)**. Summary:
+
+| ID | Ticket | Status | Notes |
+|---|---|---|---|
+| G1 | System prompt + redaction contract + hierarchy | ✅ | composed from the base contract + `mantri/prompts/grounder-addenda.md`, never copied |
+| G2 | Few-shot exemplars (6) | ✅ | real alternating turns; each asserted schema-valid |
+| G3 | Planner/Grounder split + sub-goal cache | ✅ | TTL, invalidation on goal change / navigation / K steps / two failures |
+| G4 | Text-fast-path routing | ✅ | vision only when the structural description is known to be incomplete; a plan that would not ground escalates to vision once |
+| G5 | Injection classifier + fencing | ✅ | 8 families; **the attack text never enters the prompt or the log** |
+| G6 | Model bake-off | 🟡 | harness runnable, **never run** — needs the API key (B-5) and the GPU decision (B-2) |
+| G7 | Prompt eval harness | ✅ | 40 tasks in ten categories, scoring, 4 ablation variants, CLI. **37/40 on `qwen2.5-vl-72b-instruct`** (`docs/metrics/g7-mantri-suite.md`) — not the 7B, and it predates a validator fix |
+| G8 | Failure recovery + `ask_user` policy | ✅ | complaint→correction hints; `ask_user` plans built server-side so recovery never depends on the model |
+
+140 offline tests (`server/tests/test_mantri_*.py`). The eval harness is tested from both
+ends (ADR-0004's lesson): a blindly-clicking model scores 11/40, an idle one 2/40, and a
+hand-written correct answer for every task scores 40/40 — the suite can both fail and be
+passed. The first real run found two post-validation gaps before it found any model
+weakness; both are closed, so 37/40 is a baseline pending a re-run.
+
+Historic notes:
 G1 ✅ system prompt + redaction contract · G5 ✅ untrusted-content fencing ·
 G7 🟡 **S-05 RE-RAN: 6/7** on Qwen2.5-VL-72B — see `docs/metrics/s05-ssg-reasoning.md`. `coreference` now passes (the 429 backoff worked) and `credential-cannot-be-resolved` passes *properly*: the model still invented `⟦PASSWORD_1⟧`, post-validation rejected it, and it corrected on attempt 3 — the retry ladder doing exactly its job. **Injection still fails, unchanged.** Still to do: run it against `qwen/qwen2.5-vl-7b-instruct`, which is the number the submission rests on ·
 G2/G3/G4/G6/G8 ⬜.
