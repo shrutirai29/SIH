@@ -101,6 +101,18 @@ async function buildModules() {
 async function buildContent() {
   await build({
     ...common,
+    plugins: [
+      react(),
+      {
+        name: 'deny-content-xhr',
+        renderChunk(code) {
+          return code.replace(
+            /new\s+XMLHttpRequest\s*\(/g,
+            '/* XHR disabled in content script */ new (class { open(){} send(){} })('
+          );
+        },
+      },
+    ],
     build: {
       outDir,
       emptyOutDir: false,
