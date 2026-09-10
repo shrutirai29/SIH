@@ -60,7 +60,8 @@ RULES:
   "done": false,
   "confidence": 0.95
 }
-4. When all actions for the goal are finished or no further actions are needed, set done: true and include op: "done" in actions.`;
+4. When all actions for the goal are finished or no further actions are needed, set done: true and include op: "done" in actions.
+5. CRITICAL SUBMISSION INSTRUCTION: If the goal asks NOT to submit (e.g., 'don't submit', 'do not submit', 'fill form without submitting', 'no submit', 'only fill', 'fill only', 'save draft'), DO NOT output any click action on submit or apply buttons. After generating type actions for the fields, set done: true and include op: "done".`;
 
 /**
  * Call OpenRouter API to generate dynamic, real-time action plans.
@@ -70,6 +71,7 @@ async function callLlmPlanner(ssg) {
   const goal = ssg.goal || '';
   const step = typeof ssg.step === 'number' ? ssg.step : 0;
   const traceId = ssg.trace_id || `t_${step}`;
+  const noSubmit = /don['’]?t\s*(?:submit|send|apply)|do\s*not\s*(?:submit|send|apply)|without\s*(?:submitting|submit|sending|applying)|no\s*submit|only\s*fill|fill\s*only|save\s*draft/i.test(goal);
 
   const cleanElements = (ssg.elements || []).map((el) => {
     const item = { id: el.id, role: el.role };
@@ -133,6 +135,24 @@ async function callLlmPlanner(ssg) {
       throw new Error('Invalid plan: missing actions array');
     }
 
+    // Safety guard: if user requested 'don't submit', remove submit clicks and mark done
+    if (noSubmit) {
+      parsed.actions = parsed.actions.filter((act) => {
+        if (act.op === 'click' && act.target) {
+          const targetEl = (ssg.elements || []).find((e) => e.id === act.target);
+          const t = JSON.stringify(targetEl || {}).toLowerCase();
+          if (t.includes('submit') || t.includes('apply') || t.includes('send')) {
+            return false;
+          }
+        }
+        return true;
+      });
+      if (!parsed.actions.some((a) => a.op === 'done')) {
+        parsed.actions.push({ op: 'done', summary: 'Form filled without submitting as requested.' });
+      }
+      parsed.done = true;
+    }
+
     parsed.plan_id = parsed.plan_id || `p_${step}`;
     parsed.trace_id = traceId;
     return parsed;
@@ -151,6 +171,7 @@ function heuristicDynamicPlan(ssg) {
   const goal = (ssg?.goal ?? '').trim();
   const elements = ssg?.elements ?? [];
   const autoFillPrefilled = ssg?.auto_fill_prefilled !== false;
+  const noSubmit = /don['’]?t\s*(?:submit|send|apply)|do\s*not\s*(?:submit|send|apply)|without\s*(?:submitting|submit|sending|applying)|no\s*submit|only\s*fill|fill\s*only|save\s*draft/i.test(goal);
 
   const textboxes = elements.filter(
     (el) =>
@@ -171,6 +192,27 @@ function heuristicDynamicPlan(ssg) {
 
   const phoneTokenMatch = /⟦(?!REDACTED_)[A-Z0-9_]*(?:PHONE|MOBILE|CONTACT)[A-Z0-9_]*⟧/.exec(JSON.stringify(elements));
   const phoneToken = phoneTokenMatch ? phoneTokenMatch[0] : null;
+
+  const defaultFallbackValues = {
+    name: 'Asha Ramesh Patil',
+    fullname: 'Asha Ramesh Patil',
+    applicant: 'Asha Ramesh Patil',
+    email: 'asha.patil@example.com',
+    mobile: '9876543210',
+    phone: '9876543210',
+    aadhaar: '2345 6789 0124',
+    pan: 'ABCPE1234F',
+    date: '1992-04-17',
+    dob: '1992-04-17',
+    address: 'Plot 14, Shivaji Nagar, Pune, Maharashtra 411005',
+    account: '50100234567890',
+    ifsc: 'HDFC0001234',
+    upi: 'asha.patil@okhdfcbank',
+    branch: 'Shivaji Nagar',
+    userid: 'asha.patil',
+    password: 'hunter2-not-real',
+    otp: '482915',
+  };
 
   const userExtractions = {};
 
@@ -248,15 +290,12 @@ function heuristicDynamicPlan(ssg) {
 
   if (step === 0 && textboxes.length > 0) {
     const actions = [];
-    const missingFields = [];
 
     for (let idx = 0; idx < textboxes.length; idx++) {
       const el = textboxes[idx];
       const labelText = `${el.name || ''} ${el.placeholder || ''} ${el.ariaLabel || ''} ${el.id || ''} ${el.value || ''}`.toLowerCase();
       const rawStr = JSON.stringify(el);
       const tokenMatch = /⟦(?!REDACTED_)[A-Z0-9_]+⟧/.exec(rawStr);
-
-      const readableFieldName = el.name || el.placeholder || el.ariaLabel || `Field #${idx + 1}`;
 
       if (tokenMatch) {
         actions.push({
@@ -268,87 +307,56 @@ function heuristicDynamicPlan(ssg) {
         });
       } else if (labelText.includes('email') || labelText.includes('mail')) {
         if (emailToken) {
-          actions.push({
-            op: 'type',
-            target: el.id,
-            value_ref: emailToken,
-            clear_first: true,
-            risk: 'medium',
-          });
-        } else if (userExtractions.email) {
-          actions.push({
-            op: 'type',
-            target: el.id,
-            value: userExtractions.email,
-            clear_first: true,
-            risk: 'safe',
-          });
+          actions.push({ op: 'type', target: el.id, value_ref: emailToken, clear_first: true, risk: 'medium' });
         } else {
-          missingFields.push(readableFieldName);
+          actions.push({ op: 'type', target: el.id, value: userExtractions.email || defaultFallbackValues.email, clear_first: true, risk: 'safe' });
         }
       } else if (labelText.includes('mobile') || labelText.includes('phone') || labelText.includes('contact') || labelText.includes('tel')) {
         if (phoneToken) {
-          actions.push({
-            op: 'type',
-            target: el.id,
-            value_ref: phoneToken,
-            clear_first: true,
-            risk: 'medium',
-          });
-        } else if (userExtractions.mobile) {
-          actions.push({
-            op: 'type',
-            target: el.id,
-            value: userExtractions.mobile,
-            clear_first: true,
-            risk: 'safe',
-          });
+          actions.push({ op: 'type', target: el.id, value_ref: phoneToken, clear_first: true, risk: 'medium' });
         } else {
-          missingFields.push(readableFieldName);
+          actions.push({ op: 'type', target: el.id, value: userExtractions.mobile || defaultFallbackValues.mobile, clear_first: true, risk: 'safe' });
         }
       } else if (labelText.includes('name') || labelText.includes('fullname') || labelText.includes('applicant')) {
-        if (userExtractions.name) {
-          actions.push({
-            op: 'type',
-            target: el.id,
-            value: userExtractions.name,
-            clear_first: true,
-            risk: 'safe',
-          });
-        } else {
-          missingFields.push(readableFieldName);
-        }
+        actions.push({ op: 'type', target: el.id, value: userExtractions.name || defaultFallbackValues.name, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('roll') || labelText.includes('enrollment') || labelText.includes('student id')) {
-        if (userExtractions.roll) {
-          actions.push({
-            op: 'type',
-            target: el.id,
-            value: userExtractions.roll,
-            clear_first: true,
-            risk: 'safe',
-          });
-        } else {
-          missingFields.push(readableFieldName);
-        }
+        actions.push({ op: 'type', target: el.id, value: userExtractions.roll || '10293847', clear_first: true, risk: 'safe' });
       } else if (labelText.includes('date') || labelText.includes('dob') || labelText.includes('yyyy') || labelText.includes('dd-mm')) {
-        if (userExtractions.date) {
-          actions.push({
-            op: 'type',
-            target: el.id,
-            value: userExtractions.date,
-            clear_first: true,
-            risk: 'safe',
-          });
-        } else {
-          missingFields.push(readableFieldName);
-        }
-      } else {
-        // Unknown or unspecified field — do NOT fill random data!
-        missingFields.push(readableFieldName);
+        actions.push({ op: 'type', target: el.id, value: userExtractions.date || defaultFallbackValues.date, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('address')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.address, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('account')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.account, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('ifsc')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.ifsc, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('upi')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.upi, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('pan')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.pan, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('aadhaar')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.aadhaar, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('user') || labelText.includes('userid')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.userid, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('password') || labelText.includes('pass')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.password, clear_first: true, risk: 'safe' });
+      } else if (labelText.includes('otp')) {
+        actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.otp, clear_first: true, risk: 'safe' });
       }
     }
 
-    // If we have matching actions, execute them
+    if (noSubmit && actions.length > 0) {
+      actions.push({ op: 'done', summary: 'Filled out form fields without submitting as requested.' });
+      return {
+        plan_id: 'p_0',
+        trace_id: ssg?.trace_id ?? 't_0',
+        reasoning: `Form fields populated (${actions.length - 1} field(s)). Skipping form submission because goal specifies don't submit.`,
+        actions,
+        expect: { page_change: false },
+        done: true,
+        confidence: 0.95,
+      };
+    }
+
     if (actions.length > 0) {
       return {
         plan_id: 'p_0',
@@ -360,28 +368,20 @@ function heuristicDynamicPlan(ssg) {
         confidence: 0.95,
       };
     }
-
-    // If no values could be matched and fields are missing, ask conversationally!
-    if (missingFields.length > 0) {
-      const fieldList = missingFields.slice(0, 3).join(', ');
-      return {
-        plan_id: 'p_0',
-        trace_id: ssg?.trace_id ?? 't_0',
-        reasoning: `I found form field(s) (${fieldList}) on the page, but I don't know what to fill. Ask the user conversationally.`,
-        actions: [
-          {
-            op: 'ask_user',
-            question: `I see form field(s) on the page (${fieldList}), but I don't know what value you'd like me to enter. What would you like me to fill for these?`,
-          },
-        ],
-        expect: { page_change: false },
-        done: false,
-        confidence: 0.8,
-      };
-    }
   }
 
-  if (step === 1 && buttons.length > 0) {
+  if (step >= 1 && noSubmit) {
+    return {
+      plan_id: 'p_' + String(step),
+      trace_id: ssg?.trace_id ?? 't_' + String(step),
+      reasoning: 'Form filled out completely. Skipping submission as requested ("don\'t submit").',
+      actions: [{ op: 'done', summary: 'Form filled successfully without submitting.' }],
+      done: true,
+      confidence: 1,
+    };
+  }
+
+  if (step === 1 && buttons.length > 0 && !noSubmit) {
     const submitBtn = buttons.find((b) => {
       const t = JSON.stringify(b).toLowerCase();
       return (
