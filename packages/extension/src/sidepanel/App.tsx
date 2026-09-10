@@ -784,6 +784,7 @@ function LedgerView({
                 <button
                   className="diff-btn"
                   onClick={() => onInspect(entry.trace_id)}
+                  aria-label="Inspect what the server saw"
                   title="Inspect what the server saw"
                 >
                   Inspect Diff →
