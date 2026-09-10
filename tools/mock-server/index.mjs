@@ -315,13 +315,24 @@ function heuristicDynamicPlan(ssg) {
     }
   }
 
-  const checkboxes = elements.filter(
-    (el) =>
-      el.role === 'checkbox' ||
-      el.role === 'radio' ||
-      (el.tag === 'input' && (el.type === 'checkbox' || el.type === 'radio')) ||
-      /agree|terms|policy|consent|accept|confirm/i.test(`${el.name || ''} ${el.ariaLabel || ''} ${el.placeholder || ''} ${el.id || ''}`)
-  );
+  const checkboxes = [];
+  const radioGroups = new Map();
+
+  for (const el of elements) {
+    const raw = `${el.name || ''} ${el.ariaLabel || ''} ${el.placeholder || ''} ${el.id || ''}`.toLowerCase();
+    const isRadio = el.role === 'radio' || (el.tag === 'input' && el.type === 'radio');
+    const isCb = el.role === 'checkbox' || (el.tag === 'input' && el.type === 'checkbox') || /agree|terms|policy|consent|accept|confirm/i.test(raw);
+
+    if (isRadio) {
+      const groupName = el.name || el.ariaLabel || 'radio_group_1';
+      if (!radioGroups.has(groupName)) {
+        radioGroups.set(groupName, []);
+      }
+      radioGroups.get(groupName).push(el);
+    } else if (isCb) {
+      checkboxes.push(el);
+    }
+  }
 
   const nextBtn = buttons.find((b) => {
     const t = JSON.stringify(b).toLowerCase();
@@ -348,7 +359,7 @@ function heuristicDynamicPlan(ssg) {
     );
   });
 
-  if (step === 0 && textboxes.length > 0) {
+  if (step === 0 && (textboxes.length > 0 || radioGroups.size > 0 || checkboxes.length > 0)) {
     const actions = [];
     const missingFields = [];
 
@@ -418,6 +429,28 @@ function heuristicDynamicPlan(ssg) {
       }
     }
 
+    // Handle Radio button groups: select ONLY ONE option per group
+    for (const [group, options] of radioGroups.entries()) {
+      if (options.length > 0) {
+        // If user prompt specified a preference (e.g. Female / Male), match it, else select 1st option
+        const matched = options.find((opt) => {
+          const name = `${opt.name || ''} ${opt.ariaLabel || ''} ${opt.placeholder || ''}`.toLowerCase();
+          return goal.toLowerCase().includes(name);
+        }) || options[0];
+
+        if (matched && actions.length < 5) {
+          actions.push({ op: 'click', target: matched.id, risk: 'safe' });
+        }
+      }
+    }
+
+    // Auto-click terms / consent / agreement checkboxes ONCE
+    for (const cb of checkboxes) {
+      if (actions.length < 5) {
+        actions.push({ op: 'click', target: cb.id, risk: 'safe' });
+      }
+    }
+
     // If user requested to ask on unknown fields, or if an unknown field cannot be matched
     if (askIfUnknown && missingFields.length > 0) {
       const fieldList = missingFields.slice(0, 3).join(', ');
@@ -436,13 +469,6 @@ function heuristicDynamicPlan(ssg) {
         done: false,
         confidence: 0.8,
       };
-    }
-
-    // Auto-click terms / consent / agreement checkboxes
-    for (const cb of checkboxes) {
-      if (actions.length < 5) {
-        actions.push({ op: 'click', target: cb.id, risk: 'safe' });
-      }
     }
 
     // If multi-page Next button exists, click Next automatically to advance step
@@ -473,13 +499,18 @@ function heuristicDynamicPlan(ssg) {
     }
 
     if (actions.length > 0) {
+      // Mark done: true if no submit or next button remains, preventing infinite loop!
+      const isComplete = !nextBtn && !submitBtn;
+      if (isComplete) {
+        actions.push({ op: 'done', summary: 'Successfully filled out all form fields.' });
+      }
       return {
         plan_id: 'p_0',
         trace_id: ssg?.trace_id ?? 't_0',
         reasoning: `Extracted form data from goal. Filling ${actions.length} matching field(s).`,
         actions,
         expect: { page_change: false },
-        done: false,
+        done: isComplete,
         confidence: 0.95,
       };
     }
@@ -518,19 +549,17 @@ function heuristicDynamicPlan(ssg) {
     // Submit final form if submit/apply button is present
     const targetBtn = submitBtn || buttons[0];
     if (targetBtn) {
-      const actions = [];
-      for (const cb of checkboxes) {
-        actions.push({ op: 'click', target: cb.id, risk: 'safe' });
-      }
-      actions.push({ op: 'click', target: targetBtn.id, risk: 'safe' });
       return {
         plan_id: 'p_' + String(step),
         trace_id: ssg?.trace_id ?? 't_' + String(step),
         reasoning: 'Form input complete. Submitting application.',
-        actions,
+        actions: [
+          { op: 'click', target: targetBtn.id, risk: 'safe' },
+          { op: 'done', summary: 'Form submitted successfully.' },
+        ],
         expect: { page_change: false },
-        done: false,
-        confidence: 0.9,
+        done: true,
+        confidence: 0.95,
       };
     }
   }
