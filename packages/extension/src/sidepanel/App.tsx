@@ -467,7 +467,7 @@ function LedgerView({
   return (
     <main className="pane">
       <section className="card">
-        <h2>LEKHA Privacy Ledger</h2>
+        <h2>Privacy ledger (LEKHA)</h2>
 
         <p className="muted">
           Tamper-evident local record of agent activity. Sensitive values are not stored.
