@@ -307,6 +307,39 @@ function heuristicDynamicPlan(ssg) {
     }
   }
 
+  const checkboxes = elements.filter(
+    (el) =>
+      el.role === 'checkbox' ||
+      el.role === 'radio' ||
+      (el.tag === 'input' && (el.type === 'checkbox' || el.type === 'radio')) ||
+      /agree|terms|policy|consent|accept|confirm/i.test(`${el.name || ''} ${el.ariaLabel || ''} ${el.placeholder || ''} ${el.id || ''}`)
+  );
+
+  const nextBtn = buttons.find((b) => {
+    const t = JSON.stringify(b).toLowerCase();
+    return (
+      t.includes('next') ||
+      t.includes('continue') ||
+      t.includes('proceed') ||
+      t.includes('step') ||
+      t.includes('forward') ||
+      t.includes('save & continue') ||
+      t.includes('save and continue')
+    );
+  });
+
+  const submitBtn = buttons.find((b) => {
+    const t = JSON.stringify(b).toLowerCase();
+    return (
+      t.includes('send') ||
+      t.includes('submit') ||
+      t.includes('apply') ||
+      t.includes('finish') ||
+      t.includes('sign up') ||
+      t.includes('register')
+    );
+  });
+
   if (step === 0 && textboxes.length > 0) {
     const actions = [];
 
@@ -373,6 +406,27 @@ function heuristicDynamicPlan(ssg) {
       }
     }
 
+    // Auto-click terms / consent / agreement checkboxes
+    for (const cb of checkboxes) {
+      if (actions.length < 5) {
+        actions.push({ op: 'click', target: cb.id, risk: 'safe' });
+      }
+    }
+
+    // If multi-page Next button exists, click Next automatically to advance step
+    if (nextBtn && actions.length < 5) {
+      actions.push({ op: 'click', target: nextBtn.id, risk: 'safe' });
+      return {
+        plan_id: 'p_0',
+        trace_id: ssg?.trace_id ?? 't_0',
+        reasoning: 'Filled current page inputs and clicked Next to advance multi-step form.',
+        actions,
+        expect: { page_change: true },
+        done: false,
+        confidence: 0.95,
+      };
+    }
+
     if (noSubmit && actions.length > 0) {
       actions.push({ op: 'done', summary: 'Filled out form fields without submitting as requested.' });
       return {
@@ -399,37 +453,49 @@ function heuristicDynamicPlan(ssg) {
     }
   }
 
-  if (step >= 1 && noSubmit) {
-    return {
-      plan_id: 'p_' + String(step),
-      trace_id: ssg?.trace_id ?? 't_' + String(step),
-      reasoning: 'Form filled out completely. Skipping submission as requested ("don\'t submit").',
-      actions: [{ op: 'done', summary: 'Form filled successfully without submitting.' }],
-      done: true,
-      confidence: 1,
-    };
-  }
-
-  if (step === 1 && buttons.length > 0 && !noSubmit) {
-    const submitBtn = buttons.find((b) => {
-      const t = JSON.stringify(b).toLowerCase();
-      return (
-        t.includes('send') ||
-        t.includes('submit') ||
-        t.includes('apply') ||
-        t.includes('save') ||
-        t.includes('proceed') ||
-        t.includes('inquiry') ||
-        t.includes('confirm')
-      );
-    });
-
-    if (submitBtn) {
+  if (step >= 1) {
+    if (noSubmit) {
       return {
-        plan_id: 'p_1',
-        trace_id: ssg?.trace_id ?? 't_1',
-        reasoning: 'Input fields populated. Clicking submit to complete user instruction.',
-        actions: [{ op: 'click', target: submitBtn.id, risk: 'safe' }],
+        plan_id: 'p_' + String(step),
+        trace_id: ssg?.trace_id ?? 't_' + String(step),
+        reasoning: 'Form filled out completely. Skipping submission as requested ("don\'t submit").',
+        actions: [{ op: 'done', summary: 'Form filled successfully without submitting.' }],
+        done: true,
+        confidence: 1,
+      };
+    }
+
+    // On multi-page forms step >= 1: Check if Next button exists to proceed to next page
+    if (nextBtn) {
+      const actions = [];
+      for (const cb of checkboxes) {
+        actions.push({ op: 'click', target: cb.id, risk: 'safe' });
+      }
+      actions.push({ op: 'click', target: nextBtn.id, risk: 'safe' });
+      return {
+        plan_id: 'p_' + String(step),
+        trace_id: ssg?.trace_id ?? 't_' + String(step),
+        reasoning: 'Advancing multi-page form by clicking Next.',
+        actions,
+        expect: { page_change: true },
+        done: false,
+        confidence: 0.95,
+      };
+    }
+
+    // Submit final form if submit/apply button is present
+    const targetBtn = submitBtn || buttons[0];
+    if (targetBtn) {
+      const actions = [];
+      for (const cb of checkboxes) {
+        actions.push({ op: 'click', target: cb.id, risk: 'safe' });
+      }
+      actions.push({ op: 'click', target: targetBtn.id, risk: 'safe' });
+      return {
+        plan_id: 'p_' + String(step),
+        trace_id: ssg?.trace_id ?? 't_' + String(step),
+        reasoning: 'Form input complete. Submitting application.',
+        actions,
         expect: { page_change: false },
         done: false,
         confidence: 0.9,
