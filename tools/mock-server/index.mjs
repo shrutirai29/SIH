@@ -368,29 +368,29 @@ function heuristicDynamicPlan(ssg) {
           risk: 'medium',
         });
       } else if (labelText.includes('email') || labelText.includes('mail')) {
-        if (userExtractions.email) {
-          actions.push({ op: 'type', target: el.id, value: userExtractions.email, clear_first: true, risk: 'safe' });
-        } else if (emailToken) {
-          actions.push({ op: 'type', target: el.id, value_ref: emailToken, clear_first: true, risk: 'medium' });
-        } else {
-          actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.email, clear_first: true, risk: 'safe' });
-        }
+        actions.push({
+          op: 'type',
+          target: el.id,
+          value: userExtractions.email || defaultFallbackValues.email,
+          clear_first: true,
+          risk: 'safe',
+        });
       } else if (labelText.includes('password') || labelText.includes('pass')) {
-        if (userExtractions.password) {
-          actions.push({ op: 'type', target: el.id, value: userExtractions.password, clear_first: true, risk: 'safe' });
-        } else if (passTokenInGoal) {
-          actions.push({ op: 'type', target: el.id, value_ref: passTokenInGoal, clear_first: true, risk: 'medium' });
-        } else {
-          actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.password, clear_first: true, risk: 'safe' });
-        }
+        actions.push({
+          op: 'type',
+          target: el.id,
+          value: userExtractions.password || defaultFallbackValues.password,
+          clear_first: true,
+          risk: 'safe',
+        });
       } else if (labelText.includes('mobile') || labelText.includes('phone') || labelText.includes('contact') || labelText.includes('tel')) {
-        if (userExtractions.mobile) {
-          actions.push({ op: 'type', target: el.id, value: userExtractions.mobile, clear_first: true, risk: 'safe' });
-        } else if (phoneToken) {
-          actions.push({ op: 'type', target: el.id, value_ref: phoneToken, clear_first: true, risk: 'medium' });
-        } else {
-          actions.push({ op: 'type', target: el.id, value: defaultFallbackValues.mobile, clear_first: true, risk: 'safe' });
-        }
+        actions.push({
+          op: 'type',
+          target: el.id,
+          value: userExtractions.mobile || defaultFallbackValues.mobile,
+          clear_first: true,
+          risk: 'safe',
+        });
       } else if (labelText.includes('name') || labelText.includes('fullname') || labelText.includes('applicant')) {
         actions.push({ op: 'type', target: el.id, value: userExtractions.name || defaultFallbackValues.name, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('roll') || labelText.includes('enrollment') || labelText.includes('student id')) {
