@@ -503,7 +503,7 @@ export class AgentLoop {
           userAnswers: Object.fromEntries(this.#userAnswers),
         })) as ExtractResult | undefined;
         if (reply !== undefined) return reply;
-      } catch (err) {
+      } catch {
         if (attempt === 0) {
           // Content script not active on this tab yet (e.g. extension reloaded or page pre-existed). Inject now.
           await this.#ensureContentScript();
