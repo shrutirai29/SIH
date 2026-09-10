@@ -459,9 +459,9 @@ export async function execute(action: Action): Promise<ActionResult> {
           el.focus({ preventScroll: true });
           el.click();
         } else if (el instanceof Element) {
-          (el as any).scrollIntoView?.({ block: 'center' });
+          el.scrollIntoView({ block: 'center' });
           await settle(80);
-          (el as any).focus?.({ preventScroll: true });
+          (el as HTMLElement).focus?.({ preventScroll: true });
           el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
         }
         await settle(150);
