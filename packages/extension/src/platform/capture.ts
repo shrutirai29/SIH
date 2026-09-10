@@ -219,11 +219,32 @@ export async function captureActiveTab(
     }
 
     let rawDataUrl: unknown;
-    if (typeof options.windowId === 'number') {
-      rawDataUrl = await tabs.captureVisibleTab(options.windowId, details);
-    } else {
-      // Pass details as first argument when windowId is omitted
-      rawDataUrl = await (tabs.captureVisibleTab as (opts: unknown) => Promise<string>)(details);
+    try {
+      if (typeof options.windowId === 'number') {
+        rawDataUrl = await tabs.captureVisibleTab(options.windowId, details);
+      } else {
+        rawDataUrl = await (tabs.captureVisibleTab as (opts: unknown) => Promise<string>)(details);
+      }
+    } catch {
+      const gChrome = (globalThis as unknown as { chrome?: { tabs?: { captureVisibleTab?: (...args: unknown[]) => unknown } } }).chrome;
+      if (typeof gChrome?.tabs?.captureVisibleTab === 'function') {
+        rawDataUrl = await new Promise((resolve) => {
+          try {
+            if (typeof options.windowId === 'number') {
+              gChrome!.tabs!.captureVisibleTab!(options.windowId, details, (res: string) => {
+                resolve(res || null);
+              });
+            } else {
+              gChrome!.tabs!.captureVisibleTab!(null, details, (res: string) => {
+                resolve(res || null);
+              });
+            }
+          } catch (chromeErr) {
+            console.warn('[PRAHARI Capture] Native chrome capture failed:', chromeErr);
+            resolve(null);
+          }
+        });
+      }
     }
 
     if (!rawDataUrl || typeof rawDataUrl !== 'string') {

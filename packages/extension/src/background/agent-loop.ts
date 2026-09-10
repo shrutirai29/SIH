@@ -114,8 +114,8 @@ export class AgentLoop {
     this.#patch({ phase: 'idle', message: reason });
   }
 
-async start(goal: string): Promise<AgentState> {
-  if (this.#abort !== null) this.stop('Restarting.');
+  async start(goal: string): Promise<AgentState> {
+    if (this.#abort !== null) this.stop('Restarting.');
 
   // Start a fresh session. Remove temporary payload data
   // from the previous session.
@@ -191,10 +191,20 @@ async start(goal: string): Promise<AgentState> {
         needVisual = false;
         this.#patch({ tier: 2, message: 'Capturing and redacting visual evidence requested by planner…' });
 
+        const tabId = await this.#activeTabId();
+        let targetWindowId: number | undefined;
+        try {
+          const tab = await browser.tabs.get(tabId);
+          targetWindowId = tab?.windowId;
+        } catch {
+          targetWindowId = undefined;
+        }
+
         let captured: CapturedTab | null = null;
         try {
-          captured = await captureActiveTab();
-        } catch {
+          captured = await captureActiveTab(targetWindowId !== undefined ? { windowId: targetWindowId } : {});
+        } catch (err) {
+          console.warn('[PRAHARI Capture] captureActiveTab failed:', err);
           captured = null;
         }
 
@@ -462,10 +472,54 @@ async start(goal: string): Promise<AgentState> {
   }
 
   async #activeTabId(): Promise<number> {
-    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-    const id = tab?.id;
-    if (id === undefined) throw new Error('no active tab');
-    return id;
+    const isNonWeb = (t?: { id?: number; url?: string }): boolean => {
+      if (!t || t.id === undefined) return true;
+      if (!t.url) return false;
+      const u = t.url;
+      return (
+        u.startsWith('chrome-extension://') ||
+        u.startsWith('moz-extension://') ||
+        u.startsWith('chrome://') ||
+        u.startsWith('about:') ||
+        u.startsWith('edge://')
+      );
+    };
+
+    // 1. Current window active tab (fast path for normal extension usage)
+    try {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id !== undefined && !isNonWeb(tab)) return tab.id;
+    } catch {
+      // ignore
+    }
+
+    // 2. Active tab across any window that is a real webpage
+    try {
+      const activeTabs = await browser.tabs.query({ active: true });
+      const webActive = activeTabs.find((t) => !isNonWeb(t));
+      if (webActive?.id !== undefined) return webActive.id;
+    } catch {
+      // ignore
+    }
+
+    // 3. Fallback: search all tabs across windows for any web tab
+    try {
+      const allTabs = await browser.tabs.query({});
+      const webTab = allTabs.find((t) => !isNonWeb(t));
+      if (webTab?.id !== undefined) return webTab.id;
+    } catch {
+      // ignore
+    }
+
+    // 4. Ultimate fallback: active tab in current window even if URL not matched
+    try {
+      const [fallback] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (fallback?.id !== undefined) return fallback.id;
+    } catch {
+      // ignore
+    }
+
+    throw new Error('no active tab');
   }
 
   async #extract(goal: string, step: number, traceId: string, sessionId: string): Promise<ExtractResult> {

@@ -29,6 +29,8 @@ browser.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(unsubscribe);
 });
 
+
+
 /* ------------------------------------------------------------- request handling */
 
 browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefined => {
