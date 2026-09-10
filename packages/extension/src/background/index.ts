@@ -252,7 +252,15 @@ browser.runtime.onMessage.addListener(
       case 'RUN_CANARY_AUDIT': {
         const canaryMsg = msg as { kind: 'RUN_CANARY_AUDIT'; tabId?: number };
         return (async () => {
-          const tabId = await getEffectiveTabId(canaryMsg.tabId, sender.tab?.id);
+          let tabId = await getEffectiveTabId(canaryMsg.tabId, sender.tab?.id);
+          if (tabId === undefined) {
+            try {
+              const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
+              tabId = activeTab?.id;
+            } catch {
+              tabId = undefined;
+            }
+          }
           if (tabId === undefined) throw new Error('RUN_CANARY_AUDIT requires a valid tabId');
           const loop = manager.getOrCreate(tabId);
           return loop.canaryAudit();
@@ -261,10 +269,12 @@ browser.runtime.onMessage.addListener(
 
       case 'GET_TRANSMISSION': {
         const transMsg = msg as { kind: 'GET_TRANSMISSION'; traceId: string; tabId?: number };
-        const tabId = transMsg.tabId ?? sender.tab?.id;
-        if (tabId === undefined) return Promise.resolve(null);
-        const loop = manager.get(tabId);
-        return Promise.resolve(loop?.transmissions.get(transMsg.traceId) ?? null);
+        return (async () => {
+          const tabId = await getEffectiveTabId(transMsg.tabId, sender.tab?.id);
+          if (tabId === undefined) return null;
+          const loop = manager.get(tabId);
+          return loop?.transmissions.get(transMsg.traceId) ?? null;
+        })();
       }
 
       case 'FOCUS_TAB': {

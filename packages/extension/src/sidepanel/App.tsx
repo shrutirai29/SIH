@@ -214,7 +214,16 @@ export function App(): React.JSX.Element {
   }, [mainTab, currentState?.step, refreshLedger]);
 
   const start = async (): Promise<void> => {
-    if (goal.trim().length === 0 || selectedTabId === null) return;
+    let targetTabId = selectedTabId;
+    if (targetTabId === null) {
+      try {
+        const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
+        targetTabId = activeTab?.id ?? null;
+      } catch {
+        targetTabId = null;
+      }
+    }
+    if (goal.trim().length === 0 || targetTabId === null) return;
 
     setBusy(true);
     setSelfTest(null);
@@ -222,7 +231,7 @@ export function App(): React.JSX.Element {
     try {
       await browser.runtime.sendMessage({
         kind: 'START_TASK',
-        tabId: selectedTabId,
+        tabId: targetTabId,
         goal: goal.trim(),
       });
     } catch (err) {
@@ -588,9 +597,9 @@ export function App(): React.JSX.Element {
             <button
               className="primary"
               onClick={() => void start()}
-              disabled={running || busy || selectedTabId === null}
+              disabled={running || busy}
             >
-              Run on Selected Tab
+              Run
             </button>
 
             <button
@@ -751,6 +760,7 @@ function LedgerView({
 }): React.JSX.Element {
   return (
     <main className="pane ledger-pane">
+      <h2>Privacy ledger (LEKHA)</h2>
       <div className="row">
         <button onClick={onRefresh}>↻ Refresh</button>
         <span className="grow" />

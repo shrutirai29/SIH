@@ -419,6 +419,7 @@ export class AgentLoop {
    * that looks nowhere.
    */
   async canaryAudit(): Promise<CanaryAuditResult> {
+    await this.#ensureContentScript();
     const report = (await browser.tabs.sendMessage(this.#tabId, {
       kind: 'RUN_CANARY_AUDIT',
     })) as {

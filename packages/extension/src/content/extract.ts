@@ -300,6 +300,7 @@ export interface ExtractOptions {
    * executor is about to resolve.
    */
   ephemeral?: boolean;
+  autoFillPrefilled?: boolean;
 }
 
 export interface ExtractOutput {
@@ -493,7 +494,7 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
   const profile = await getStoredProfile();
   const usePrefill = profile?.usePrefilledData !== false;
   let augmentedGoal = opts.goal;
-  if (usePrefill && profile && (profile.fullName || profile.enrollmentNo || profile.phone || profile.email || profile.dob)) {
+  if (opts.autoFillPrefilled && usePrefill && profile && (profile.fullName || profile.enrollmentNo || profile.phone || profile.email || profile.dob)) {
     const pDetails: string[] = [];
     if (profile.fullName) pDetails.push(`name ${profile.fullName}`);
     if (profile.enrollmentNo) pDetails.push(`roll ${profile.enrollmentNo}`);
