@@ -38,7 +38,7 @@ if (target !== 'chrome' && target !== 'firefox') {
 }
 
 const outDir = resolve(root, 'dist-' + target);
-const serverOrigin = process.env.PRAHARI_SERVER_ORIGIN ?? 'http://localhost:8080';
+const serverOrigin = process.env.PRAHARI_SERVER_ORIGIN ?? 'http://127.0.0.1:8000';
 const isDev = process.env.NODE_ENV !== 'production';
 
 /** Shared define so `import.meta.env` resolves identically in both passes. */
@@ -183,6 +183,25 @@ async function copyNetraAssets() {
   );
 }
 
+/**
+ * Copies animation assets (Rive mascot & Lottie files) into the extension package.
+ */
+async function copyAnimationAssets() {
+  const animAssets = resolve(root, 'assets/animations');
+  try {
+    await cp(
+      animAssets,
+      resolve(outDir, 'assets/animations'),
+      {
+        recursive: true,
+        force: true,
+      },
+    );
+  } catch (err) {
+    console.warn('Animation assets copy warning:', err.message);
+  }
+}
+
 /** A 128px placeholder icon so the manifest reference resolves. Replaced in Phase 7. */
 async function writeIcon() {
   // 1x1 transparent PNG, scaled by the browser. Deliberately not a real asset yet.
@@ -199,6 +218,7 @@ async function run() {
   await flattenHtml();
   await cleanNested();
   await copyNetraAssets();
+  await copyAnimationAssets();
   await writeManifest();
   await writeIcon();
   console.log('built ' + target + ' -> ' + outDir);

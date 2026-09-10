@@ -11,12 +11,20 @@
  */
 
 import browser from 'webextension-polyfill';
-import type { ExecuteAction, ExtractScreen, Request, SetOverlay } from '../shared/messages.js';
+import type {
+  AgentState,
+  ExecuteAction,
+  ExtractScreen,
+  Request,
+  SetMascotVisible,
+  SetOverlay,
+} from '../shared/messages.js';
 import { extractScreen } from './extract.js';
 import { execute } from './executor.js';
 import { wipeSession } from './session.js';
 import { setOverlayEnabled } from './overlay.js';
 import { runCanaryAudit } from './canary-audit.js';
+import { getMascotOverlay } from './mascot/mascot-overlay.js';
 
 browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefined => {
   const msg = raw as Request | undefined;
@@ -31,6 +39,8 @@ browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefin
       step: m.step,
       traceId: m.traceId,
       sessionId: m.sessionId,
+      autoFillPrefilled: m.autoFillPrefilled,
+      userAnswers: m.userAnswers,
     });
   }
 
@@ -59,6 +69,64 @@ browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefin
     return Promise.resolve({ outcome: 'blocked', detail: 'session wiped' });
   }
 
+  if (msg.kind === 'TOGGLE_MASCOT') {
+    const mascot = getMascotOverlay();
+    mascot.toggle();
+    return Promise.resolve({ visible: mascot.getVisible() });
+  }
+
+  if (msg.kind === 'SET_MASCOT_VISIBLE') {
+    const mascot = getMascotOverlay();
+    if ((msg as SetMascotVisible).visible) {
+      mascot.show();
+    } else {
+      mascot.hide();
+    }
+    return Promise.resolve({ ok: true });
+  }
+
+  if ((msg as { kind: string }).kind === 'STATE_UPDATE') {
+    const push = msg as unknown as { state: AgentState };
+    if (push.state) {
+      // If a task starts or is active, ensure the mascot is visible to display progress
+      if (push.state.phase !== 'idle') {
+        getMascotOverlay().show();
+      }
+      getMascotOverlay().updateState(push.state);
+    }
+    return Promise.resolve({ ok: true });
+  }
+
+  if (msg.kind === 'TASK_NOTIFY') {
+    const notify = msg as unknown as {
+      tabId: number;
+      tabTitle: string;
+      phase: AgentState['phase'];
+      message: string;
+    };
+    getMascotOverlay().showToast(notify);
+    return Promise.resolve({ ok: true });
+  }
+
+  if (msg.kind === 'SET_MASCOT_THEME') {
+    const themeMsg = msg as unknown as { themeIndex?: number; themeName?: string; tabNumber?: number };
+    const mascot = getMascotOverlay();
+    if (typeof themeMsg.tabNumber === 'number') {
+      mascot.setTabNumber(themeMsg.tabNumber);
+    }
+    if (typeof themeMsg.themeIndex === 'number') {
+      mascot.setTheme(themeMsg.themeIndex);
+    } else if (typeof themeMsg.themeName === 'string') {
+      mascot.setThemeByName(themeMsg.themeName);
+    }
+    return Promise.resolve({ ok: true });
+  }
+
   // Not addressed to us. Leave the channel for the background or offscreen document.
   return undefined;
 });
+
+// PRAHARI mascot starts turned off by default on page load.
+// It appears only when the user explicitly turns it on (e.g. clicking the Chrome extension icon)
+// or when an active task state update is received.
+

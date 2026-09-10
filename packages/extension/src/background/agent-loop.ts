@@ -8,39 +8,32 @@
  * wrong, and sending it again would only be wrong again.
  */
 
-import type { Action, ActionOp, ActionPlan, HistoryItem, Outcome, RedactedText, Risk, SSG } from '@prahari/ssg';
+import type { Action, ActionPlan, RedactedText, SSG } from '@prahari/ssg';
 import {
   Ledger,
   MemoryLedgerStore,
   createEgressGuard,
-  normalizeReasonCode,
   type EgressGuard,
-  type SanitizedReasonCode,
 } from '@prahari/kavach';
 import { CONFIG } from '../shared/config.js';
 import type {
   ActionResult,
+  AgentQuestion,
   AgentState,
   CanaryAuditResult,
   ExtractResult,
 } from '../shared/messages.js';
-import {
-  browser,
-  bytesToBase64,
-  captureActiveTab,
-  createInferenceHost,
-  redactCapturedTab,
-  type CapturedTab,
-  type InferenceHost,
-  type RedactedScreenshot,
-} from '../platform/index.js';
+import { browser, createInferenceHost, type InferenceHost } from '../platform/index.js';
 import { ExtensionLedgerStore } from './ledger-store.js';
 import { TransmissionBuffer } from './transmissions.js';
 import { postStep } from './net.js';
+import type { UserProfile } from '../shared/profile.js';
 
-function freshState(): AgentState {
+function freshState(tabId: number, taskId: string): AgentState {
   return {
     phase: 'idle',
+    taskId,
+    tabId,
     goal: '',
     step: 0,
     tier: 1,
@@ -50,6 +43,7 @@ function freshState(): AgentState {
     redactionCount: 0,
     blockedCount: 0,
     inferenceHost: 'not started',
+    pendingQuestion: undefined,
   };
 }
 
@@ -62,35 +56,59 @@ function newSessionId(): string {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-export interface AgentLoopDeps {
-  readonly guard?: EgressGuard;
-  readonly host?: InferenceHost;
-  readonly store?: ExtensionLedgerStore;
-}
-
 export class AgentLoop {
-  #state: AgentState = freshState();
+  #state: AgentState;
   #abort: AbortController | null = null;
   #listeners = new Set<(s: AgentState) => void>();
+
+  /** The browser tab this loop is permanently bound to. */
+  readonly #tabId: number;
+
+  /** Unique identifier for this task instance (rotates every new AgentLoop). */
+  readonly taskId: string;
 
   readonly ledger: Ledger;
   /** Exact bytes of recent steps, memory only, for the diff viewer (ticket D16). */
   readonly transmissions = new TransmissionBuffer();
-  readonly #store: ExtensionLedgerStore;
+  readonly #store = new ExtensionLedgerStore();
   readonly #guard: EgressGuard;
   readonly #host: InferenceHost;
 
-  constructor(deps: AgentLoopDeps = {}) {
-    this.#store = deps.store ?? new ExtensionLedgerStore();
+  /** Whether the agent is allowed to use saved profile data to fill known fields. */
+  #autoFillPrefilled = true;
+
+  /** The saved user profile (passed in at task start). */
+  #userProfile: UserProfile | null = null;
+
+  /**
+   * Accumulated answers from the user for the current task.
+   * key = fieldKey, value = user-supplied string.
+   */
+  #userAnswers: Map<string, string> = new Map();
+
+  /**
+   * Resolve function injected by #run when it is paused waiting for a user answer.
+   * Cleared immediately after the answer arrives.
+   */
+  #answerResolve: ((value: string) => void) | null = null;
+
+  /** Number of form fields filled in the current task. */
+  #filledFieldsCount = 0;
+
+  /** Whether the user has been given the form review lag time before submission. */
+  #hasReviewedForm = false;
+
+  constructor(tabId: number) {
+    this.#tabId = tabId;
+    this.taskId = newSessionId();
+    this.#state = freshState(this.#tabId, this.taskId);
     this.ledger = new Ledger(this.#store);
-    this.#host = deps.host ?? createInferenceHost();
-    this.#guard =
-      deps.guard ??
-      createEgressGuard({
-        serverOrigin: CONFIG.serverOrigin,
-        ledger: this.ledger,
-        allowInsecureLocalhost: CONFIG.allowInsecureLocalhost,
-      });
+    this.#host = createInferenceHost();
+    this.#guard = createEgressGuard({
+      serverOrigin: CONFIG.serverOrigin,
+      ledger: this.ledger,
+      allowInsecureLocalhost: CONFIG.allowInsecureLocalhost,
+    });
   }
 
   get state(): AgentState {
@@ -111,28 +129,64 @@ export class AgentLoop {
   stop(reason = 'Stopped by user.'): void {
     this.#abort?.abort();
     this.#abort = null;
+    // Reject any pending question so the loop does not hang.
+    if (this.#answerResolve) {
+      this.#answerResolve('__STOPPED__');
+      this.#answerResolve = null;
+    }
     // ARCHITECTURE.md sec 10: the kept artefacts are dropped at session end.
     this.transmissions.clear();
-    this.#patch({ phase: 'idle', message: reason });
+    this.#patch({ phase: 'idle', message: reason, pendingQuestion: undefined });
   }
 
-  async start(goal: string): Promise<AgentState> {
+  interrupt(reason = 'Page navigated away — task stopped.'): void {
+    this.#abort?.abort();
+    this.#abort = null;
+    if (this.#answerResolve) {
+      this.#answerResolve('__STOPPED__');
+      this.#answerResolve = null;
+    }
+    this.transmissions.clear();
+    this.#patch({ phase: 'interrupted', message: reason, pendingQuestion: undefined });
+  }
+
+  async start(
+    goal: string,
+    opts?: {
+      autoFillPrefilled?: boolean;
+      userProfile?: UserProfile;
+      savedFields?: Record<string, string>;
+    },
+  ): Promise<AgentState> {
     if (this.#abort !== null) this.stop('Restarting.');
 
-  // Start a fresh session. Remove temporary payload data
-  // from the previous session.
-  this.transmissions.clear();
+    this.#autoFillPrefilled = opts?.autoFillPrefilled ?? true;
+    this.#userProfile = opts?.userProfile ?? null;
+    this.#userAnswers = new Map();
+    if (opts?.savedFields) {
+      for (const [key, val] of Object.entries(opts.savedFields)) {
+        if (typeof val === 'string' && val.length > 0) {
+          this.#userAnswers.set(key, val);
+        }
+      }
+    }
+    this.#filledFieldsCount = 0;
+    this.#hasReviewedForm = false;
 
-  const controller = new AbortController();
-  this.#abort = controller;
-  const sessionId = newSessionId();
+    // Start a fresh session. Remove temporary payload data
+    // from the previous session.
+    this.transmissions.clear();
 
-  this.#patch({
-    ...freshState(),
-    phase: 'observing',
-    goal,
-    message: 'Starting.',
-  });
+    const controller = new AbortController();
+    this.#abort = controller;
+    const sessionId = newSessionId();
+
+    this.#patch({
+      ...freshState(this.#tabId, this.taskId),
+      phase: 'observing',
+      goal,
+      message: 'Starting.',
+    });
 
   // Prove the inference boundary is alive before the first step. In the skeleton it
   // only pings; from Phase 2 it is where the models live.
@@ -145,21 +199,11 @@ export class AgentLoop {
 
   void this.#run(goal, sessionId, controller.signal);
   return this.#state;
-}
-
-  #isTerminal(): boolean {
-    const p = this.#state.phase;
-    return p === 'done' || p === 'blocked' || p === 'error';
   }
 
   async #run(goal: string, sessionId: string, signal: AbortSignal): Promise<void> {
-    let needVisual = false;
-    let consecutiveFailures = 0;
-    const MAX_CONSECUTIVE_RECOVERIES = 3;
-    const history: HistoryItem[] = [];
-
     for (let step = 0; step < CONFIG.maxSteps; step++) {
-      if (signal.aborted || this.#isTerminal()) return;
+      if (signal.aborted) return;
 
       const traceId = 't_' + String(step);
       // ---- observe + sanitize (both happen inside the tab) ----------------------
@@ -182,107 +226,7 @@ export class AgentLoop {
 
   return;
 }
-      if (signal.aborted || this.#isTerminal()) return;
-
-      // ---- history integration from LEKHA (durable, privacy-safe context for MANTRI)
-      try {
-        const sanitizedHistory = await this.ledger.getSanitizedHistory({
-          sessionId,
-          maxItems: 20,
-        });
-        const actionHistory = sanitizedHistory.filter(
-          (item) => item.event_type === 'action' || item.event_type === 'lifecycle',
-        );
-        if (actionHistory.length > 0) {
-          extract.ssg.history = actionHistory.map((item) => ({
-            step: item.step ?? 0,
-            action:
-              item.action_op ??
-              (item.reason_code ? String(item.reason_code).toLowerCase() : item.event_type),
-            ...(item.target_id !== undefined ? { target: item.target_id } : {}),
-            outcome: item.action_outcome ?? 'no_change',
-            ...(item.reason_code !== undefined ? { reason_code: item.reason_code } : {}),
-          }));
-        } else if (history.length > 0) {
-          extract.ssg.history = [...history];
-        }
-      } catch (err) {
-        console.warn('LEKHA getSanitizedHistory failed, falling back to in-memory history:', err);
-        if (history.length > 0) {
-          extract.ssg.history = [...history];
-        }
-      }
-
-      let imageBlob: Blob | undefined = undefined;
-      if (needVisual) {
-        needVisual = false;
-        this.#patch({ tier: 2, message: 'Capturing and redacting visual evidence requested by planner…' });
-
-        const tabId = await this.#activeTabId();
-        let targetWindowId: number | undefined;
-        try {
-          const tab = await browser.tabs.get(tabId);
-          targetWindowId = tab?.windowId;
-        } catch {
-          targetWindowId = undefined;
-        }
-
-        let captured: CapturedTab | null = null;
-        try {
-          captured = await captureActiveTab(targetWindowId !== undefined ? { windowId: targetWindowId } : {});
-        } catch (err) {
-          console.warn('[PRAHARI Capture] captureActiveTab failed:', err);
-          captured = null;
-        }
-
-        if (!captured) {
-          this.#patch({
-            phase: 'error',
-            message: 'Visual capture failed when requested by planner. Stopping.',
-          });
-          return;
-        }
-
-        let redacted: RedactedScreenshot | null = null;
-        try {
-          redacted = await redactCapturedTab(captured, extract.ssg, extract.diff);
-        } catch {
-          redacted = null;
-        }
-
-        if (!redacted) {
-          this.#patch({
-            phase: 'error',
-            message: 'Visual redaction failed when requested by planner. Stopping.',
-          });
-          return;
-        }
-
-        try {
-          const arrayBuffer = await redacted.blob.arrayBuffer();
-          const base64Data = bytesToBase64(new Uint8Array(arrayBuffer));
-          extract.ssg.tier = 2;
-          extract.ssg.attachment = {
-            screenshot: {
-              format: 'png',
-              w: redacted.width,
-              h: redacted.height,
-              sha256: redacted.sha256,
-              redacted: true,
-              data: base64Data,
-            },
-          };
-          imageBlob = redacted.blob;
-        } catch {
-          this.#patch({
-            phase: 'error',
-            message: 'Constructing visual attachment failed. Stopping.',
-          });
-          return;
-        }
-      } else {
-        this.#patch({ tier: 1 });
-      }
+      if (signal.aborted) return;
 
       const redactions = Object.values(extract.redactions).reduce((a, b) => a + b, 0);
       this.#patch({
@@ -293,8 +237,8 @@ export class AgentLoop {
 
       // ---- guard + send --------------------------------------------------------
       this.#patch({ phase: 'sending', message: 'Checking the payload before it leaves…' });
-      const result = await postStep(this.#guard, extract.ssg, imageBlob);
-      if (signal.aborted || this.#isTerminal()) return;
+      const result = await postStep(this.#guard, extract.ssg);
+      if (signal.aborted) return;
 
       if (!result.ok) {
         if (result.kind === 'blocked') {
@@ -353,19 +297,18 @@ export class AgentLoop {
       });
 
       // ---- act -----------------------------------------------------------------
-      const plan: ActionPlan = result.plan;
-      needVisual = plan.need_visual === true;
-      const outcome = await this.#actAll(plan.actions, step, history, signal, sessionId, traceId);
-      if (signal.aborted || this.#isTerminal()) return;
+      const rawPlan = result.plan as unknown as Record<string, unknown>;
+      const plan: ActionPlan = (rawPlan && typeof rawPlan === 'object' && 'plan' in rawPlan && rawPlan.plan
+        ? (rawPlan.plan as ActionPlan)
+        : (result.plan as ActionPlan)) || { plan_id: 'p_0', trace_id: traceId, actions: [], done: true };
+      const actions: readonly Action[] = Array.isArray(plan?.actions) ? plan.actions : [];
 
-      if (plan.done || plan.actions.some((a) => a.op === 'done')) {
-        const doneAction = plan.actions.find((a) => a.op === 'done');
-        await this.#logLifecycle({
-          sessionId,
-          traceId,
-          step,
-          reason_code: 'TASK_COMPLETE',
-        });
+      const actRes = await this.#actAll(actions, plan, step, signal);
+      if (signal.aborted) return;
+
+      if (plan.done || actions.some((a) => a.op === 'done')) {
+        const doneAction = actions.find((a) => a.op === 'done');
+
         this.#patch({
           phase: 'done',
           message:
@@ -373,43 +316,41 @@ export class AgentLoop {
             doneAction.op === 'done' &&
             doneAction.summary
               ? doneAction.summary
-              : 'Task complete.',
+              : (plan as unknown as { reasoning?: string }).reasoning || 'Task complete.',
         });
 
         return;
       }
 
-      if (outcome === 'blocked') {
-        // Security block or awaiting user — stop immediately, do NOT retry
-        return;
-      }
-
-      if (outcome === 'error' || outcome === 'no_change') {
-        consecutiveFailures++;
-        if (consecutiveFailures >= MAX_CONSECUTIVE_RECOVERIES) {
-          await this.#logLifecycle({
-            sessionId,
-            traceId,
-            step,
-            reason_code: 'RECOVERY_EXHAUSTED',
-          });
-          this.#patch({
-            phase: 'error',
-            message: 'Exceeded recovery budget (' + String(MAX_CONSECUTIVE_RECOVERIES) + ' consecutive failures). Stopping.',
-          });
-          return;
-        }
-        await this.#logLifecycle({
-          sessionId,
-          traceId,
-          step,
-          reason_code: 'RECOVERY_STARTED',
-        });
+      const failAction = actions.find((a) => a.op === 'fail');
+      if (failAction && failAction.op === 'fail') {
         this.#patch({
-          message: 'Action had ' + outcome + ', replanning (recovery attempt ' + String(consecutiveFailures) + '/' + String(MAX_CONSECUTIVE_RECOVERIES) + ')…',
+          phase: 'error',
+          message: failAction.reason || (plan as unknown as { reasoning?: string }).reasoning || 'Task could not be completed on this page.',
         });
-      } else if (outcome === 'advanced') {
-        consecutiveFailures = 0;
+        return;
+      }
+
+      if (actRes.outcome === 'error') {
+        this.#patch({
+          phase: 'error',
+          message: actRes.detail || (plan as unknown as { reasoning?: string }).reasoning || 'An action failed. Stopping.',
+        });
+        return;
+      }
+
+      if (actRes.outcome === 'blocked') {
+        // Already surfaced with its reason by #actAll. Stop rather than retry: a
+        // refused action refused for a reason, and repeating it would repeat the ask.
+        return;
+      }
+
+      if (actions.length === 0) {
+        this.#patch({
+          phase: 'done',
+          message: (plan as unknown as { reasoning?: string }).reasoning || 'No action needed on this screen.',
+        });
+        return;
       }
 
       await sleep(CONFIG.settleMs);
@@ -420,218 +361,163 @@ export class AgentLoop {
 
   async #actAll(
     actions: readonly Action[],
+    plan: ActionPlan,
     step: number,
-    history: HistoryItem[],
     signal: AbortSignal,
-    sessionId: string,
-    traceId: string,
-  ): Promise<ActionResult['outcome']> {
+  ): Promise<{ outcome: ActionResult['outcome']; detail?: string | undefined }> {
     let last: ActionResult['outcome'] = 'no_change';
+    let lastDetail: string | undefined;
     for (const action of actions) {
-      if (signal.aborted || this.#isTerminal()) return 'blocked';
+      if (signal.aborted) return { outcome: 'blocked' };
+      if (action.op === 'done' || action.op === 'fail') return { outcome: 'advanced' };
 
-      if (action.op === 'done') {
-        history.push({
-          step,
-          action: 'done',
-          outcome: 'advanced',
-          reason_code: 'TASK_COMPLETE',
+      // ── ask_user: pause and wait for side panel answer ──────────────
+      if ((action as { op: string }).op === 'ask_user') {
+        const askAction = action as unknown as {
+          op: 'ask_user';
+          target?: Action extends { target: infer T } ? T : string;
+          field_key: string;
+          question: string;
+          options?: string[];
+        };
+
+        const q: AgentQuestion = {
+          fieldKey: askAction.field_key,
+          question: askAction.question,
+          options: askAction.options,
+        };
+
+        // Surface question to the side panel via state update.
+        this.#patch({
+          phase: 'asking',
+          message: askAction.question,
+          pendingQuestion: q,
         });
-        if (history.length > 20) history.shift();
-        await this.#logAction({
-          sessionId,
-          traceId,
-          step,
-          action_op: 'done',
-          action_outcome: 'advanced',
-          reason_code: 'TASK_COMPLETE',
+
+        // Block until the user supplies an answer (or the task is stopped).
+        const answer = await new Promise<string>((resolve) => {
+          this.#answerResolve = resolve;
         });
-        return 'advanced';
+
+        this.#answerResolve = null;
+
+        if (answer === '__STOPPED__' || signal.aborted) return { outcome: 'blocked' };
+
+        // If target element is known, type the user's answer into it immediately
+        if (askAction.target && answer) {
+          this.#filledFieldsCount++;
+          this.#patch({ phase: 'acting', message: `Filling: ${answer}`, pendingQuestion: undefined });
+          await this.#execute({
+            op: 'type',
+            target: askAction.target,
+            value: answer,
+            clear_first: true,
+            risk: 'safe',
+          } as Action);
+        } else {
+          this.#patch({ phase: 'acting', message: 'Got answer, continuing…', pendingQuestion: undefined });
+        }
+
+        // Store the answer so subsequent steps can reference it.
+        this.#userAnswers.set(askAction.field_key, answer);
+        last = 'advanced';
+        continue;
       }
 
-      if (action.op === 'fail') {
-        const reason_code =
-          normalizeReasonCode(action.reason, undefined, 'error', 'action') ?? 'TASK_FAILED';
-        history.push({
-          step,
-          action: 'fail',
-          outcome: 'error',
-          reason_code,
-        });
-        if (history.length > 20) history.shift();
-        await this.#logAction({
-          sessionId,
-          traceId,
-          step,
-          action_op: 'fail',
-          action_outcome: 'error',
-          reason_code,
-        });
-        this.#patch({
-          phase: 'error',
-          message: action.reason ?? 'Agent reported task failure.',
-        });
-        return 'error';
+      if (action.op === 'type') {
+        this.#filledFieldsCount++;
       }
 
-      if (action.op === 'ask_user') {
-        history.push({
-          step,
-          action: 'ask_user',
-          outcome: 'no_change',
-          reason_code: 'USER_DECLINED',
-        });
-        if (history.length > 20) history.shift();
-        await this.#logAction({
-          sessionId,
-          traceId,
-          step,
-          action_op: 'ask_user',
-          action_outcome: 'no_change',
-          reason_code: 'USER_DECLINED',
-        });
+      // ── Review Lag Time: If clicking a submit/search/action button after fields are filled ──
+      const isSubmitAction =
+        action.op === 'click' &&
+        !this.#hasReviewedForm &&
+        (this.#filledFieldsCount > 0 || step >= 1) &&
+        (
+          Boolean(action.reason && /submit|search|apply|proceed|book|confirm|send|inquiry/i.test(action.reason)) ||
+          Boolean((plan as unknown as { reasoning?: string }).reasoning && /submit|search|apply|proceed|book|confirm|send|populated|fields populated/i.test((plan as unknown as { reasoning?: string }).reasoning || '')) ||
+          this.#filledFieldsCount > 0
+        );
 
-        // TODO/DEFERRED(ask_user-resume):
-        // Legitimate human interaction required. The existing AgentPhase contract
-        // ('idle'|'observing'|'sanitizing'|'sending'|'thinking'|'acting'|'done'|'blocked'|'error')
-        // does not define a dedicated 'waiting_for_user' phase, nor does messages.ts define a
-        // 'RESUME_TASK' / 'USER_RESPONSE' request. To safely pause without modifying SSG or
-        // inventing a premature messaging protocol, ask_user is paused via the terminal 'blocked'
-        // phase with a user-facing prompt ("Awaiting user response: ..."), ensuring zero browser
-        // actions are dispatched and no automatic retry occurs until interactive resume is added.
-        this.#patch({
-          phase: 'blocked',
-          message: 'Awaiting user response: ' + action.question,
-        });
-        return 'blocked';
+      if (isSubmitAction) {
+        this.#hasReviewedForm = true;
+        const reviewSeconds = 7;
+        for (let remaining = reviewSeconds; remaining > 0; remaining--) {
+          if (signal.aborted) return { outcome: 'blocked' };
+          this.#patch({
+            phase: 'acting',
+            message: `Form filled! Please review the details. Submitting in ${remaining}s… (Click Stop to keep without submitting)`,
+          });
+          await sleep(1000);
+          if (signal.aborted) return { outcome: 'blocked' };
+        }
       }
 
       this.#patch({ phase: 'acting', message: 'Executing: ' + action.op });
       const res = await this.#execute(action);
       last = res.outcome;
+      lastDetail = res.detail;
 
-      const target =
-        'target' in action && typeof (action as { target?: string }).target === 'string'
-          ? (action as { target: string }).target.slice(0, 16)
-          : undefined;
-
-      const risk: Risk = 'risk' in action && action.risk !== undefined ? action.risk : 'safe';
-      const reason_code = normalizeReasonCode(undefined, res.detail, res.outcome, 'action');
-
-      history.push({
-        step,
-        action: action.op,
-        ...(target !== undefined ? { target } : {}),
-        outcome: res.outcome,
-        ...(reason_code !== undefined ? { reason_code } : {}),
-      });
-      if (history.length > 20) history.shift();
-
-      await this.#logAction({
-        sessionId,
-        traceId,
-        step,
-        action_op: action.op,
-        ...(target !== undefined ? { target_id: target } : {}),
-        action_outcome: res.outcome,
-        ...(risk !== undefined ? { risk } : {}),
-        ...(reason_code !== undefined ? { reason_code } : {}),
-      });
-
-      // A refused action is the system defending itself; the user must see WHY
+      // A refused action is the system defending itself; the user must see WHY, and
+      // a sink-binding refusal is the single most important thing this UI can say.
       if (res.outcome === 'blocked') {
         this.#patch({
           phase: 'blocked',
           blockedCount: this.#state.blockedCount + 1,
           message: res.detail ?? 'Action refused.',
         });
-        return 'blocked';
+        return { outcome: 'blocked', detail: res.detail };
       }
-
-      // If an intermediate action in a multi-action plan fails or yields no change,
-      // abort remaining actions from this plan to allow re-observation and bounded recovery.
-      if (res.outcome === 'error') {
-        return 'error';
-      }
-
-      if (res.outcome === 'no_change') {
-        return 'no_change';
-      }
+      if (res.outcome === 'error') return { outcome: 'error', detail: res.detail };
     }
-    return last;
+    return { outcome: last, detail: lastDetail };
   }
 
-  async #activeTabId(): Promise<number> {
-    const isNonWeb = (t?: { id?: number; url?: string }): boolean => {
-      if (!t || t.id === undefined) return true;
-      if (!t.url) return false;
-      const u = t.url;
-      return (
-        u.startsWith('chrome-extension://') ||
-        u.startsWith('moz-extension://') ||
-        u.startsWith('chrome://') ||
-        u.startsWith('about:') ||
-        u.startsWith('edge://')
-      );
-    };
 
-    // 1. Current window active tab (fast path for normal extension usage)
+  async #ensureContentScript(): Promise<void> {
     try {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id !== undefined && !isNonWeb(tab)) return tab.id;
-    } catch {
-      // ignore
+      if (browser.scripting?.executeScript) {
+        await browser.scripting.executeScript({
+          target: { tabId: this.#tabId },
+          files: ['content.js'],
+        });
+        await sleep(350);
+      }
+    } catch (err) {
+      console.warn('PRAHARI: Failed to dynamically inject content.js into tab', this.#tabId, err);
     }
-
-    // 2. Active tab across any window that is a real webpage
-    try {
-      const activeTabs = await browser.tabs.query({ active: true });
-      const webActive = activeTabs.find((t) => !isNonWeb(t));
-      if (webActive?.id !== undefined) return webActive.id;
-    } catch {
-      // ignore
-    }
-
-    // 3. Fallback: search all tabs across windows for any web tab
-    try {
-      const allTabs = await browser.tabs.query({});
-      const webTab = allTabs.find((t) => !isNonWeb(t));
-      if (webTab?.id !== undefined) return webTab.id;
-    } catch {
-      // ignore
-    }
-
-    // 4. Ultimate fallback: active tab in current window even if URL not matched
-    try {
-      const [fallback] = await browser.tabs.query({ active: true, currentWindow: true });
-      if (fallback?.id !== undefined) return fallback.id;
-    } catch {
-      // ignore
-    }
-
-    throw new Error('no active tab');
   }
 
   async #extract(goal: string, step: number, traceId: string, sessionId: string): Promise<ExtractResult> {
-    const tabId = await this.#activeTabId();
-    const reply = (await browser.tabs.sendMessage(tabId, {
-      kind: 'EXTRACT_SCREEN',
-      goal,
-      step,
-      traceId,
-      sessionId,
-    })) as ExtractResult | undefined;
-    if (reply === undefined) throw new Error('content script did not reply');
-    return reply;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const reply = (await browser.tabs.sendMessage(this.#tabId, {
+          kind: 'EXTRACT_SCREEN',
+          goal,
+          step,
+          traceId,
+          sessionId,
+          // Context forwarded to the server planner via SSG extension fields.
+          autoFillPrefilled: this.#autoFillPrefilled,
+          userProfile: this.#userProfile ?? undefined,
+          userAnswers: Object.fromEntries(this.#userAnswers),
+        })) as ExtractResult | undefined;
+        if (reply !== undefined) return reply;
+      } catch (err) {
+        if (attempt === 0) {
+          // Content script not active on this tab yet (e.g. extension reloaded or page pre-existed). Inject now.
+          await this.#ensureContentScript();
+        } else {
+          await sleep(200);
+        }
+      }
+    }
+    throw new Error('Could not connect to webpage content script. Please refresh (F5) the target tab.');
   }
 
   async #execute(action: Action): Promise<ActionResult> {
-    if (this.#isTerminal()) {
-      return { outcome: 'error', detail: 'Agent is in terminal state' };
-    }
     try {
-      const tabId = await this.#activeTabId();
-      const reply = (await browser.tabs.sendMessage(tabId, {
+      const reply = (await browser.tabs.sendMessage(this.#tabId, {
         kind: 'EXECUTE_ACTION',
         action,
       })) as ActionResult | undefined;
@@ -641,58 +527,23 @@ export class AgentLoop {
     }
   }
 
-  async #logAction(input: {
-    sessionId: string;
-    traceId: string;
-    step: number;
-    action_op: ActionOp;
-    target_id?: string;
-    action_outcome: Outcome;
-    risk?: Risk;
-    reason_code?: SanitizedReasonCode;
-  }): Promise<void> {
-    try {
-      await this.ledger.append({
-        event_type: 'action',
-        session_id: input.sessionId,
-        trace_id: input.traceId,
-        step: input.step,
-        action_op: input.action_op,
-        ...(input.target_id !== undefined ? { target_id: input.target_id } : {}),
-        action_outcome: input.action_outcome,
-        ...(input.risk !== undefined ? { risk: input.risk } : {}),
-        ...(input.reason_code !== undefined ? { reason_code: input.reason_code } : {}),
-      });
-    } catch (err) {
-      // Diagnostic logging failure must not fail browser action or task execution (RULES.md P6/P8 fail-safe for action logs)
-      console.warn('LEKHA action logging failed:', err);
+  /**
+   * Called by the background message handler when the side panel sends an
+   * ANSWER_QUESTION message. Resolves the pending Promise and unblocks #run.
+   */
+  provideAnswer(fieldKey: string, value: string): void {
+    if (this.#answerResolve) {
+      // Also persist so subsequent steps can reference it.
+      this.#userAnswers.set(fieldKey, value);
+      this.#answerResolve(value);
+      this.#answerResolve = null;
     }
   }
 
-  async #logLifecycle(input: {
-    sessionId: string;
-    traceId: string;
-    step: number;
-    reason_code: SanitizedReasonCode;
-  }): Promise<void> {
-    try {
-      await this.ledger.append({
-        event_type: 'lifecycle',
-        session_id: input.sessionId,
-        trace_id: input.traceId,
-        step: input.step,
-        reason_code: input.reason_code,
-      });
-    } catch (err) {
-      console.warn('LEKHA lifecycle logging failed:', err);
-    }
-  }
-
-  /** Turns the on-page overlay on or off in the active tab (ticket D15). */
+  /** Turns the on-page overlay on or off in this loop's tab (ticket D15). */
   async setOverlay(on: boolean): Promise<{ ok: boolean }> {
     try {
-      const tabId = await this.#activeTabId();
-      await browser.tabs.sendMessage(tabId, { kind: 'SET_OVERLAY', enabled: on });
+      await browser.tabs.sendMessage(this.#tabId, { kind: 'SET_OVERLAY', enabled: on });
       return { ok: true };
     } catch {
       return { ok: false };
@@ -719,8 +570,7 @@ export class AgentLoop {
    * that looks nowhere.
    */
   async canaryAudit(): Promise<CanaryAuditResult> {
-    const tabId = await this.#activeTabId();
-    const report = (await browser.tabs.sendMessage(tabId, {
+    const report = (await browser.tabs.sendMessage(this.#tabId, {
       kind: 'RUN_CANARY_AUDIT',
     })) as {
       total: number;
@@ -799,12 +649,6 @@ export class AgentLoop {
     });
 
     return { passed: checks.every((c) => c.ok), checks };
-  }
-
-  /** Clears the privacy ledger storage, resetting to an empty genesis state. */
-  async clearLedger(): Promise<{ ok: boolean }> {
-    await this.ledger.clear();
-    return { ok: true };
   }
 }
 

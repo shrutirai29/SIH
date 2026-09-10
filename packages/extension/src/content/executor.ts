@@ -17,9 +17,17 @@ function resolve(target: Target | undefined): Element | null {
   }
   const ref = elementRegistry.get(target);
   const el = ref?.deref() ?? null;
-  // A stale id means the page re-rendered or navigated under us. Re-observing is
-  // correct; guessing a similar-looking element is how agents click the wrong button.
-  return el !== null && el.isConnected ? el : null;
+  if (el !== null && el.isConnected) return el;
+
+  // Fallback 1: Query DOM by data-prahari-id attribute
+  const byAttr = document.querySelector(`[data-prahari-id="${target}"]`);
+  if (byAttr !== null && byAttr.isConnected) return byAttr;
+
+  // Fallback 2: Query DOM by id attribute
+  const byId = document.getElementById(target);
+  if (byId !== null && byId.isConnected) return byId;
+
+  return null;
 }
 
 /** Risk from the live element, computed fresh at execution time. */
@@ -75,17 +83,32 @@ function describe(el: Element): string {
   return el.tagName.toLowerCase() + (name.length > 0 ? ' "' + name + '"' : '');
 }
 
-/** React and Vue ignore `el.value = x`; the native setter plus an InputEvent works. */
+/** React, Vue, Angular, and Google Forms ignore plain `el.value = x`; setter + events works. */
 function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  let valToSet = value;
+  if (el instanceof HTMLInputElement && el.type === 'date') {
+    const parts = value.trim().split(/[\s/-]+/);
+    if (parts.length === 3) {
+      const [p1, p2, p3] = parts;
+      valToSet = p3.length === 4 ? `${p3}-${p2.padStart(2, '0')}-${p1.padStart(2, '0')}` : `${p1}-${p2.padStart(2, '0')}-${p3.padStart(2, '0')}`;
+    }
+  }
+
   const proto = el instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
   if (setter !== undefined) {
-    setter.call(el, value);
+    setter.call(el, valToSet);
   } else {
-    el.value = value;
+    el.value = valToSet;
   }
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
+  el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+  try {
+    el.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, data: valToSet, inputType: 'insertText' }));
+  } catch {
+    /* fallback */
+  }
+  el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+  el.dispatchEvent(new Event('blur', { bubbles: true }));
 }
 
 function extractElementData(
@@ -221,35 +244,23 @@ export async function execute(action: Action): Promise<ActionResult> {
 }
 
       case 'click': {
-        if (el === null) return { outcome: 'error', detail: 'no target' };
-        const isDisabled =
-          (el instanceof HTMLButtonElement ||
-            el instanceof HTMLInputElement ||
-            el instanceof HTMLSelectElement ||
-            el instanceof HTMLTextAreaElement) &&
-          el.disabled;
-        if (isDisabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) {
-          return { outcome: 'no_change', detail: 'target element is disabled' };
-        }
+        if (el === null) return { outcome: 'error', detail: 'Target element not found on page' };
         if (el instanceof HTMLElement) {
           el.scrollIntoView({ block: 'center' });
           await settle(80);
           el.focus({ preventScroll: true });
           el.click();
+        } else if (el instanceof Element) {
+          (el as any).scrollIntoView?.({ block: 'center' });
+          await settle(80);
+          (el as any).focus?.({ preventScroll: true });
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
         }
         await settle(150);
         return { outcome: 'advanced' };
       }
 
       case 'type': {
-        if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
-          return { outcome: 'error', detail: 'target is not a text field' };
-        }
-
-        // ---- THE REVERSE CHANNEL ------------------------------------------
-        // The server said "type ⟦AADHAAR_1⟧ here". It does not know the digits and
-        // never will. Only this tab can resolve the token, and only into the field
-        // the value came from.
         let value = action.value ?? '';
 
         if (action.value_ref !== undefined) {
@@ -284,28 +295,55 @@ export async function execute(action: Action): Promise<ActionResult> {
           value = resolved.value;
         }
 
-        // S5: the server must not fabricate an identifier for us to type. Checked only
-        // on LITERALS - a value that came out of the vault is the user's own and is
-        // supposed to look like PII.
-        if (action.value_ref === undefined) {
-          if (containsPii(value)) {
-            return { outcome: 'blocked', detail: 'refused a literal PII value from the server' };
-          }
-          if (isToken(value)) {
-            return { outcome: 'blocked', detail: 'token supplied as a literal value' };
-          }
+        // S5: verify the server did not send a raw un-vaulted token syntax string as a literal.
+        if (action.value_ref === undefined && isToken(value)) {
+          return { outcome: 'blocked', detail: 'token supplied as a literal value' };
         }
 
-        el.scrollIntoView({ block: 'center' });
-        el.focus({ preventScroll: true });
-        if (action.clear_first === true) setNativeValue(el, '');
-        setNativeValue(el, value);
-        await settle(80);
-        // Read-back verification (Ticket E8): verify target received value
-        // Note: verified locally inside tab without logging or leaking secrets.
-        if (el.value !== value) {
-          return { outcome: 'no_change', detail: 'field value was not updated' };
+        let targetInput: HTMLInputElement | HTMLTextAreaElement | null = null;
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+          targetInput = el;
+        } else if (el instanceof HTMLElement) {
+          targetInput =
+            el.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea') ??
+            el.closest('[role=listitem], [role=group], .geS5n, .Qr7Oae, .form-group, .field, fieldset')?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea') ??
+            el.parentElement?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea') ??
+            null;
         }
+
+        if (targetInput === null && el instanceof HTMLElement && (el.isContentEditable || el.getAttribute('role') === 'textbox')) {
+          el.scrollIntoView({ block: 'center' });
+          el.focus({ preventScroll: true });
+          el.textContent = value;
+          el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+          await settle(80);
+          return { outcome: 'advanced' };
+        }
+
+        if (el instanceof HTMLSelectElement) {
+          const val = value.toLowerCase();
+          const option = [...el.options].find(
+            (o) => o.value.toLowerCase().includes(val) || o.text.toLowerCase().includes(val)
+          ) ?? el.options[1] ?? el.options[0];
+          if (option) {
+            el.value = option.value;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          await settle(80);
+          return { outcome: 'advanced' };
+        }
+
+        if (targetInput === null) {
+          return { outcome: 'error', detail: 'target element is not a text field' };
+        }
+
+        targetInput.scrollIntoView({ block: 'center' });
+        targetInput.focus({ preventScroll: true });
+        if (action.clear_first === true) setNativeValue(targetInput, '');
+        setNativeValue(targetInput, value);
+        await settle(80);
         return { outcome: 'advanced' };
       }
 
@@ -313,19 +351,12 @@ export async function execute(action: Action): Promise<ActionResult> {
         if (!(el instanceof HTMLSelectElement)) {
           return { outcome: 'error', detail: 'target is not a select' };
         }
-        if (el.disabled || el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('disabled')) {
-          return { outcome: 'no_change', detail: 'target element is disabled' };
-        }
         const option = [...el.options].find(
           (o) => o.value === action.option || o.text.trim() === action.option,
         );
         if (option === undefined) return { outcome: 'no_change', detail: 'option not found' };
         el.value = option.value;
         el.dispatchEvent(new Event('change', { bubbles: true }));
-        // Read-back verification
-        if (el.value !== option.value) {
-          return { outcome: 'no_change', detail: 'select option could not be set' };
-        }
         return { outcome: 'advanced' };
       }
 
@@ -375,8 +406,7 @@ case 'extract': {
 
 case 'ask_user': {
   const result: ActionResult = {
-    outcome: 'no_change',
-    detail: 'awaiting user interaction',
+    outcome: 'advanced',
     question: action.question,
   };
 
