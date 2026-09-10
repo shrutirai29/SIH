@@ -118,19 +118,18 @@ export class AgentManager {
 
     browser.tabs.onUpdated.addListener(
       (tabId: number, changeInfo: { url?: string; status?: string }) => {
-        // Only real navigations away from target web pages, ignoring internal browser schemes
-        if (changeInfo.url) {
-          const u = changeInfo.url;
-          if (
-            u.startsWith('chrome://') ||
-            u.startsWith('chrome-extension://') ||
-            u.startsWith('about:') ||
-            u.startsWith('edge://') ||
-            u.startsWith('moz-extension://')
-          ) {
-            return;
+        // When a page finishes loading/navigating, sync active state with content script if running
+        if (changeInfo.status === 'complete') {
+          const loop = this.#loops.get(tabId);
+          if (loop && !TERMINAL_PHASES.has(loop.state.phase)) {
+            for (const listener of this.#stateListeners) {
+              try {
+                listener(tabId, loop.state);
+              } catch (err) {
+                console.error('Error in state listener on tab update:', err);
+              }
+            }
           }
-          this.interrupt(tabId);
         }
       },
     );

@@ -124,7 +124,23 @@ browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefin
   return undefined;
 });
 
-// PRAHARI mascot starts turned off by default on page load.
-// It appears only when the user explicitly turns it on (e.g. clicking the Chrome extension icon)
-// or when an active task state update is received.
+// On page load or navigation, query current tab's agent state from background.
+// If an active task is running, automatically show the mascot and synchronize state.
+browser.runtime
+  .sendMessage({ kind: 'GET_STATE' })
+  .then((rawState) => {
+    const s = rawState as (AgentState & { tabNumber?: number }) | null;
+    if (s && s.phase && s.phase !== 'idle') {
+      const mascot = getMascotOverlay();
+      if (typeof s.tabNumber === 'number') {
+        mascot.setTabNumber(s.tabNumber);
+      }
+      mascot.show();
+      mascot.updateState(s);
+    }
+  })
+  .catch(() => {
+    // Ignore initial state query error if background script is not ready
+  });
+
 

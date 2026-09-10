@@ -181,6 +181,9 @@ export class MascotOverlay {
     if (typeof state.tabNumber === 'number') {
       this.setTabNumber(state.tabNumber);
     }
+    if (state.phase !== 'idle' && !this.isVisible) {
+      this.show();
+    }
     if (!this.isVisible) return;
     this.ensureDom();
 

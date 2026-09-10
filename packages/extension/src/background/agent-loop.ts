@@ -355,8 +355,18 @@ export class AgentLoop {
   }
 
   async #extract(goal: string, step: number, traceId: string, sessionId: string): Promise<ExtractResult> {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       try {
+        // If tab is currently navigating or loading a new page, wait for it to settle
+        try {
+          const tab = await browser.tabs.get(this.#tabId);
+          if (tab && tab.status === 'loading') {
+            await sleep(500);
+          }
+        } catch {
+          // Tab query error, proceed
+        }
+
         const reply = (await browser.tabs.sendMessage(this.#tabId, {
           kind: 'EXTRACT_SCREEN',
           goal,
@@ -366,15 +376,15 @@ export class AgentLoop {
         })) as ExtractResult | undefined;
         if (reply !== undefined) return reply;
       } catch {
-        if (attempt === 0) {
-          // Content script not active on this tab yet (e.g. extension reloaded or page pre-existed). Inject now.
+        if (attempt < 3) {
+          // Content script not active on this tab yet (e.g. extension reloaded, page navigated, or pre-existed). Inject now.
           await this.#ensureContentScript();
         } else {
-          await sleep(200);
+          await sleep(500);
         }
       }
     }
-    throw new Error('Could not connect to webpage content script. Please refresh (F5) the target tab.');
+    throw new Error('Could not connect to webpage content script after page navigation/refresh.');
   }
 
   async #execute(action: Action): Promise<ActionResult> {
