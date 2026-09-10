@@ -82,11 +82,12 @@ function labelTextFor(el: Element): string {
 
 function contextualLabelFor(el: Element): string {
   // Check closest question/field container (Google Forms, Typeform, standard form wrappers)
-  const container = el.closest('[role=listitem], [role=group], .geS5n, .Qr7Oae, .form-group, .field, fieldset, .freebirdFormviewerViewItemsItemItem');
+  const container = el.closest('[role=listitem], [role=group], [role=radiogroup], .geS5n, .Qr7Oae, .form-group, .field, fieldset, .freebirdFormviewerViewItemsItemItem');
   if (container !== null) {
-    const titleEl = container.querySelector('[role=heading], .M7eMe, legend, label, .label, h1, h2, h3, h4, h5, h6');
+    const titleEl = container.querySelector('[role=heading], .M7eMe, legend, label, .label, .title, .question-title, h1, h2, h3, h4, h5, h6');
     if (titleEl !== null && titleEl !== el) {
-      const text = titleEl.textContent?.trim() ?? '';
+      let text = titleEl.textContent?.trim() ?? '';
+      text = text.replace(/\s*\*+\s*$/, '').trim();
       if (text.length > 0) return text;
     }
   }
@@ -406,6 +407,11 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
     };
 
     if (name.text.length > 0) entry.name = name.text as RedactedText;
+
+    const groupTitle = contextualLabelFor(el);
+    if (groupTitle.length > 0) {
+      (entry as unknown as Record<string, unknown>).group = groupTitle;
+    }
 
     let redacted = name.applied;
 

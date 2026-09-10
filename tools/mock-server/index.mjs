@@ -48,10 +48,12 @@ RULES:
    - "type": {"op": "type", "target": "<element_id>", "value": "<text_to_type>", "clear_first": true, "risk": "safe"}
      NOTE: If an element contains a privacy token like "⟦AADHAAR_1⟧" or "⟦EMAIL_1⟧", you can reference it using "value_ref": "⟦TOKEN⟧". For any other user text or data, provide "value": "<user_data>".
    - "click": {"op": "click", "target": "<element_id>", "risk": "safe"}
+   - "ask_user": {"op": "ask_user", "question": "<question_to_ask_user>"}
    - "scroll": {"op": "scroll", "direction": "down", "amount": 400, "risk": "safe"}
    - "done": {"op": "done", "summary": "<summary of what was accomplished>"}
    - "fail": {"op": "fail", "reason": "<reason why goal cannot be completed>"}
-3. Output MUST be valid JSON in this exact structure:
+3. MULTIPLE CHOICE / UNKNOWN QUESTION INSTRUCTION: If there is a required multiple-choice question or radio button group where the user's 'goal' does NOT specify which option to select, DO NOT guess or click randomly. Output an "ask_user" action asking the user which option they want to select (listing available options).
+4. Output MUST be valid JSON in this exact structure:
 {
   "plan_id": "p_0",
   "trace_id": "<trace_id_from_input>",
@@ -60,8 +62,8 @@ RULES:
   "done": false,
   "confidence": 0.95
 }
-4. When all actions for the goal are finished or no further actions are needed, set done: true and include op: "done" in actions.
-5. CRITICAL SUBMISSION INSTRUCTION: If the goal asks NOT to submit (e.g., 'don't submit', 'do not submit', 'fill form without submitting', 'no submit', 'only fill', 'fill only', 'save draft'), DO NOT output any click action on submit or apply buttons. After generating type actions for the fields, set done: true and include op: "done".`;
+5. When all actions for the goal are finished or no further actions are needed, set done: true and include op: "done" in actions.
+6. CRITICAL SUBMISSION INSTRUCTION: If the goal asks NOT to submit (e.g., 'don't submit', 'do not submit', 'fill form without submitting', 'no submit', 'only fill', 'fill only', 'save draft'), DO NOT output any click action on submit or apply buttons. After generating type actions for the fields, set done: true and include op: "done".`;
 
 /**
  * Call OpenRouter API to generate dynamic, real-time action plans.
@@ -341,7 +343,7 @@ function heuristicDynamicPlan(ssg) {
     const isCb = el.role === 'checkbox' || (el.tag === 'input' && el.type === 'checkbox') || /agree|terms|policy|consent|accept|confirm/i.test(raw);
 
     if (isRadio) {
-      const groupName = el.name || el.ariaLabel || 'radio_group_1';
+      const groupName = el.group || el.name || el.ariaLabel || 'radio_group_1';
       if (!radioGroups.has(groupName)) {
         radioGroups.set(groupName, []);
       }
@@ -411,7 +413,7 @@ function heuristicDynamicPlan(ssg) {
           clear_first: true,
           risk: 'safe',
         });
-      } else if (labelText.includes('mobile') || labelText.includes('phone') || labelText.includes('contact') || labelText.includes('tel')) {
+      } else if (labelText.includes('mobile') || labelText.includes('phone') || labelText.includes('contact') || labelText.includes('tel') || labelText.includes('number') || labelText.includes('num')) {
         actions.push({
           op: 'type',
           target: el.id,
@@ -423,7 +425,7 @@ function heuristicDynamicPlan(ssg) {
         actions.push({ op: 'type', target: el.id, value: userExtractions.college || defaultFallbackValues.college, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('course') || labelText.includes('branch') || labelText.includes('department') || labelText.includes('degree')) {
         actions.push({ op: 'type', target: el.id, value: userExtractions.course || defaultFallbackValues.course, clear_first: true, risk: 'safe' });
-      } else if (labelText.includes('name') || labelText.includes('fullname') || labelText.includes('applicant')) {
+      } else if (labelText.includes('name') || labelText.includes('fullname') || labelText.includes('applicant') || labelText.includes('leader')) {
         actions.push({ op: 'type', target: el.id, value: userExtractions.name || defaultFallbackValues.name, clear_first: true, risk: 'safe' });
       } else if (labelText.includes('roll') || labelText.includes('enrollment') || labelText.includes('student id')) {
         actions.push({ op: 'type', target: el.id, value: userExtractions.roll || '10293847', clear_first: true, risk: 'safe' });
@@ -450,18 +452,29 @@ function heuristicDynamicPlan(ssg) {
       }
     }
 
-    // Handle Radio button groups: select ONLY ONE option per group
-    for (const [group, options] of radioGroups.entries()) {
-      if (options.length > 0) {
-        // If user prompt specified a preference (e.g. Female / Male), match it, else select 1st option
-        const matched = options.find((opt) => {
-          const name = `${opt.name || ''} ${opt.ariaLabel || ''} ${opt.placeholder || ''}`.toLowerCase();
-          return goal.toLowerCase().includes(name);
-        }) || options[0];
+    // Handle Radio button groups: match prompt preference, or inquire user if unspecified
+    const unaskedRadioQuestions = [];
+    for (const [groupName, options] of radioGroups.entries()) {
+      if (options.length === 0) continue;
 
-        if (matched && actions.length < 5) {
+      const matched = options.find((opt) => {
+        const optText = `${opt.name || ''} ${opt.ariaLabel || ''} ${opt.placeholder || ''} ${opt.id || ''}`.toLowerCase();
+        return optText.length > 0 && goal.toLowerCase().includes(optText);
+      });
+
+      if (matched) {
+        if (actions.length < 5) {
           actions.push({ op: 'click', target: matched.id, risk: 'safe' });
         }
+      } else {
+        const optionNames = options
+          .map((o) => o.name || o.ariaLabel || o.placeholder || 'Option')
+          .filter((t, i, arr) => t && arr.indexOf(t) === i);
+
+        unaskedRadioQuestions.push({
+          group: groupName,
+          options: optionNames,
+        });
       }
     }
 
@@ -470,6 +483,27 @@ function heuristicDynamicPlan(ssg) {
       if (actions.length < 5) {
         actions.push({ op: 'click', target: cb.id, risk: 'safe' });
       }
+    }
+
+    // If an unspecified radio button question exists and goal didn't specify which choice, ask user
+    if (unaskedRadioQuestions.length > 0) {
+      const q = unaskedRadioQuestions[0];
+      const ctx = pageContextInfo(ssg);
+      const optionsText = q.options.slice(0, 5).join(', ');
+      return {
+        plan_id: 'p_0',
+        trace_id: ssg?.trace_id ?? 't_0',
+        reasoning: `${ctx}: Found multiple-choice question "${q.group}". Inquiring user for preference (${optionsText}).`,
+        actions: [
+          {
+            op: 'ask_user',
+            question: `${ctx}: For question "${q.group}", which option would you like to select? (${optionsText})`,
+          },
+        ],
+        expect: { page_change: false },
+        done: false,
+        confidence: 0.9,
+      };
     }
 
     // If user requested to ask on unknown fields, or if an unknown field cannot be matched
