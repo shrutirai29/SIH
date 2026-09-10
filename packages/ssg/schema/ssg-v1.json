@@ -133,7 +133,8 @@
         "step": { "type": "integer", "minimum": 0 },
         "action": { "type": "string", "maxLength": 32 },
         "target": { "type": "string", "maxLength": 16 },
-        "outcome": { "enum": ["advanced", "no_change", "error", "blocked"] }
+        "outcome": { "enum": ["advanced", "no_change", "error", "blocked"] },
+        "reason_code": { "type": "string", "maxLength": 32 }
       }
     },
     "Attachment": {

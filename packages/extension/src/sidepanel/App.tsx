@@ -19,6 +19,7 @@ import {
   type CanaryAuditResult,
   type PanelPush,
   type SelfTestResult,
+  type VerifyLedgerResult,
 } from '../shared/messages.js';
 
 import { CONFIG } from '../shared/config.js';
@@ -57,6 +58,7 @@ export function App(): React.JSX.Element {
   const [goal, setGoal] = useState('');
   const [tab, setTab] = useState<Tab>('task');
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+  const [integrity, setIntegrity] = useState<VerifyLedgerResult | null>(null);
   const [selfTest, setSelfTest] = useState<SelfTestResult | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -83,12 +85,33 @@ export function App(): React.JSX.Element {
   }, []);
 
   const refreshLedger = useCallback(async (): Promise<void> => {
-    const entries = (await browser.runtime.sendMessage({
-      kind: 'GET_LEDGER',
-    })) as LedgerEntry[];
+    try {
+      const [entries, verifyRes] = await Promise.all([
+        browser.runtime.sendMessage({
+          kind: 'GET_LEDGER',
+        }) as Promise<LedgerEntry[]>,
+        browser.runtime.sendMessage({
+          kind: 'VERIFY_LEDGER',
+        }) as Promise<VerifyLedgerResult>,
+      ]);
 
-    setLedger([...entries].reverse());
+      setLedger([...(entries ?? [])].reverse());
+      setIntegrity(verifyRes ?? { intact: true, brokenAt: null });
+    } catch {
+      // Background unavailable or resetting
+    }
   }, []);
+
+  const clearLedger = useCallback(async (): Promise<void> => {
+    try {
+      await browser.runtime.sendMessage({
+        kind: 'CLEAR_LEDGER',
+      });
+      await refreshLedger();
+    } catch {
+      // Error handling
+    }
+  }, [refreshLedger]);
 
   useEffect(() => {
     if (tab === 'ledger') {
@@ -327,7 +350,9 @@ export function App(): React.JSX.Element {
       ) : (
         <LedgerView
           entries={ledger}
+          integrity={integrity}
           onRefresh={() => void refreshLedger()}
+          onClear={() => void clearLedger()}
           onInspect={setOpenDiff}
         />
       )}
@@ -399,22 +424,45 @@ function StatusCard({
   );
 }
 
+const ACTION_OUTCOME_LABEL: Record<string, string> = {
+  advanced: 'ADVANCED',
+  blocked: 'BLOCKED',
+  no_change: 'NO CHANGE',
+  error: 'ERROR',
+};
+
+function formatReasonCode(code: string | undefined): string {
+  if (!code) return '';
+  return code.replace(/_/g, ' ').toUpperCase();
+}
+
 function LedgerView({
   entries,
+  integrity,
   onRefresh,
+  onClear,
   onInspect,
 }: {
   entries: readonly LedgerEntry[];
+  integrity: VerifyLedgerResult | null;
   onRefresh: () => void;
+  onClear: () => void;
   onInspect: (traceId: string) => void;
 }): React.JSX.Element {
-  const visibleEntries = entries.filter(
-    (entry, index, all) =>
+  const [confirmingClear, setConfirmingClear] = useState(false);
+
+  const visibleEntries = entries.filter((entry, index, all) => {
+    if (entry.event_type === 'action' || entry.event_type === 'lifecycle') {
+      return true;
+    }
+    return (
       all.findIndex(
         (candidate) =>
+          (candidate.event_type ?? 'network') === 'network' &&
           candidate.trace_id === entry.trace_id,
-      ) === index,
-  );
+      ) === index
+    );
+  });
 
   return (
     <main className="pane">
@@ -422,94 +470,222 @@ function LedgerView({
         <h2>Privacy ledger (LEKHA)</h2>
 
         <p className="muted">
-          Every egress attempt, including refused ones. Hashes and manifests
-          only — the ledger never stores the payload it describes.
+          Tamper-evident local record of agent activity. Sensitive values are not stored.
         </p>
 
-        <button onClick={onRefresh}>
-          Refresh
-        </button>
+        <p className="muted" style={{ fontStyle: 'italic', fontSize: '11px', marginTop: '2px' }}>
+          MANTRI uses sanitized execution history to reason about previous outcomes.
+        </p>
+
+        <div
+          className={
+            'integrity-badge ' +
+            (integrity === null ? 'pending' : integrity.intact ? 'verified' : 'failed')
+          }
+          style={{
+            padding: '6px 10px',
+            borderRadius: '6px',
+            border:
+              '1px solid ' +
+              (integrity === null
+                ? 'var(--border)'
+                : integrity.intact
+                  ? 'var(--ok)'
+                  : 'var(--bad)'),
+            background: 'var(--bg)',
+            marginTop: '6px',
+            width: '100%',
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>Integrity:</span>{' '}
+          {integrity === null ? (
+            <span className="muted">Checking…</span>
+          ) : integrity.intact ? (
+            <strong style={{ color: 'var(--ok)' }}>✓ Verified</strong>
+          ) : (
+            <strong style={{ color: 'var(--bad)' }}>
+              ⚠ Verification failed (broken at entry #{integrity.brokenAt})
+            </strong>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+          <button onClick={onRefresh}>Refresh</button>
+
+          {!confirmingClear ? (
+            <button
+              style={{ color: 'var(--bad)', borderColor: 'var(--bad)' }}
+              disabled={entries.length === 0}
+              onClick={() => setConfirmingClear(true)}
+            >
+              Clear ledger
+            </button>
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                padding: '8px',
+                border: '1px dashed var(--bad)',
+                borderRadius: '6px',
+                width: '100%',
+              }}
+            >
+              <span className="muted" style={{ fontSize: '11px' }}>
+                Clear all ledger records and restart genesis?
+              </span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  style={{ background: 'var(--bad)', color: '#fff', border: 0 }}
+                  onClick={() => {
+                    setConfirmingClear(false);
+                    onClear();
+                  }}
+                >
+                  Confirm Clear
+                </button>
+                <button onClick={() => setConfirmingClear(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
       </section>
 
       {visibleEntries.length === 0 ? (
-        <p className="muted pad">
-          Nothing sent yet.
-        </p>
+        <p className="muted pad">Ledger is empty. No actions or transmissions logged.</p>
       ) : (
         <ul className="ledger">
-          {visibleEntries.map((e) => (
-            <li
-              key={e.entry_hash}
-              className={e.outcome}
-            >
-              <div className="lrow">
-                <span className="badge">
-                  {OUTCOME_LABEL[e.outcome]}
-                </span>
+          {visibleEntries.map((e) => {
+            const eventType = e.event_type ?? 'network';
 
-                <span className="badge tier">
-                  T{e.tier}
-                </span>
+            if (eventType === 'action') {
+              const outcomeKey = e.action_outcome ?? 'no_change';
+              const outcomeLabel = ACTION_OUTCOME_LABEL[outcomeKey] ?? outcomeKey.toUpperCase();
+              return (
+                <li
+                  key={e.entry_hash}
+                  className={
+                    outcomeKey === 'blocked' ? 'blocked' : outcomeKey === 'advanced' ? 'sent' : ''
+                  }
+                >
+                  <div className="lrow">
+                    <span className="badge">ACTION: {e.action_op?.toUpperCase() ?? 'OP'}</span>
+                    <span
+                      className="badge"
+                      style={{
+                        borderColor:
+                          outcomeKey === 'advanced'
+                            ? 'var(--ok)'
+                            : outcomeKey === 'blocked'
+                              ? 'var(--bad)'
+                              : 'var(--border)',
+                        color:
+                          outcomeKey === 'advanced'
+                            ? 'var(--ok)'
+                            : outcomeKey === 'blocked'
+                              ? 'var(--bad)'
+                              : 'inherit',
+                      }}
+                    >
+                      {outcomeLabel}
+                    </span>
+                    {e.step !== undefined ? <span className="badge">Step {e.step}</span> : null}
+                    <span className="muted">{new Date(e.ts).toLocaleTimeString()}</span>
+                  </div>
 
-                <span className="muted">
-                  {new Date(e.ts).toLocaleTimeString()}
-                </span>
+                  <div className="lmeta">
+                    <span>
+                      Target: <code>{e.target_id ?? 'page'}</code>
+                    </span>
+                    {e.risk ? <span className="muted">Risk: {e.risk}</span> : null}
+                    <span className="grow" />
+                    <span className="muted">seq #{e.seq}</span>
+                  </div>
 
-                <span className="grow" />
+                  {e.reason_code ? (
+                    <p
+                      className="reason"
+                      style={{
+                        color: outcomeKey === 'blocked' ? 'var(--bad)' : 'var(--muted)',
+                      }}
+                    >
+                      {formatReasonCode(e.reason_code)}
+                    </p>
+                  ) : null}
+                </li>
+              );
+            }
 
-                <span className="muted">
-                  {e.byte_len > 0
-                    ? fmtBytes(e.byte_len)
-                    : '—'}
-                </span>
-              </div>
+            if (eventType === 'lifecycle') {
+              return (
+                <li key={e.entry_hash} className="sent">
+                  <div className="lrow">
+                    <span className="badge">LIFECYCLE</span>
+                    <span
+                      className="badge"
+                      style={{ borderColor: 'var(--ok)', color: 'var(--ok)' }}
+                    >
+                      RECOVERY
+                    </span>
+                    {e.step !== undefined ? <span className="badge">Step {e.step}</span> : null}
+                    <span className="muted">{new Date(e.ts).toLocaleTimeString()}</span>
+                  </div>
 
-              <div className="lmeta">
-                <code title="SHA-256 of the exact bytes offered to the network">
-                  {e.payload_sha256 === ''
-                    ? 'not sent'
-                    : e.payload_sha256.slice(0, 16) + '…'}
-                </code>
+                  <div className="lmeta">
+                    <span className="muted">
+                      {e.reason_code
+                        ? formatReasonCode(e.reason_code)
+                        : 'Replanning after previous failure'}
+                    </span>
+                    <span className="grow" />
+                    <span className="muted">seq #{e.seq}</span>
+                  </div>
+                </li>
+              );
+            }
 
-                <span className="muted">
-                  {e.origin_class}
-                </span>
+            return (
+              <li key={e.entry_hash} className={e.outcome}>
+                <div className="lrow">
+                  <span className="badge">NETWORK</span>
+                  <span className="badge">{OUTCOME_LABEL[e.outcome]}</span>
+                  <span className="badge tier">T{e.tier}</span>
+                  {e.step !== undefined ? <span className="badge">Step {e.step}</span> : null}
+                  <span className="muted">{new Date(e.ts).toLocaleTimeString()}</span>
+                  <span className="grow" />
+                  <span className="muted">{e.byte_len > 0 ? fmtBytes(e.byte_len) : '—'}</span>
+                </div>
 
-                <span className="grow" />
+                <div className="lmeta">
+                  <code title="SHA-256 of the exact bytes offered to the network">
+                    {e.payload_sha256 === '' ? 'not sent' : e.payload_sha256.slice(0, 16) + '…'}
+                  </code>
+                  <span className="muted">{e.origin_class}</span>
+                  <span className="grow" />
+                  {e.outcome === 'sent' || e.outcome === 'blocked' ? (
+                    <button className="link" onClick={() => onInspect(e.trace_id)}>
+                      What the server saw →
+                    </button>
+                  ) : (
+                    <span className="muted">Waiting for result…</span>
+                  )}
+                </div>
 
-                {e.outcome === 'sent' ||
-                e.outcome === 'blocked' ? (
-                  <button
-                    className="link"
-                    onClick={() => onInspect(e.trace_id)}
-                  >
-                    What the server saw →
-                  </button>
-                ) : (
-                  <span className="muted">
-                    Waiting for result…
-                  </span>
-                )}
-              </div>
+                {e.blocked_reason !== undefined ? (
+                  <p className="reason">{e.blocked_reason}</p>
+                ) : null}
 
-              {e.blocked_reason !== undefined ? (
-                <p className="reason">
-                  {e.blocked_reason}
+                <p className="counts">
+                  {Object.entries(e.manifest?.counts ?? {}).length === 0
+                    ? 'no redactions declared'
+                    : Object.entries(e.manifest.counts)
+                        .map(([key, value]) => key + '×' + String(value))
+                        .join('  ')}
                 </p>
-              ) : null}
-
-              <p className="counts">
-                {Object.entries(e.manifest.counts).length === 0
-                  ? 'no redactions declared'
-                  : Object.entries(e.manifest.counts)
-                      .map(
-                        ([key, value]) =>
-                          key + '×' + String(value),
-                      )
-                      .join('  ')}
-              </p>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </main>

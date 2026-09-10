@@ -20,11 +20,46 @@ vi.hoisted(() => {
       },
     },
     storage: {
-      local: {
-        get: () => Promise.resolve({}),
-        set: () => Promise.resolve(),
-        remove: () => Promise.resolve(),
-      },
+      local: (() => {
+        const data: Record<string, unknown> = {};
+        g.__testStorage = data;
+        return {
+          get: (keyOrKeys?: unknown, cb?: (res: Record<string, unknown>) => void) => {
+            const callback =
+              typeof keyOrKeys === 'function'
+                ? (keyOrKeys as (res: Record<string, unknown>) => void)
+                : cb;
+            let result: Record<string, unknown> = {};
+            if (typeof keyOrKeys === 'string') {
+              result = { [keyOrKeys]: data[keyOrKeys] };
+            } else if (Array.isArray(keyOrKeys)) {
+              result = Object.fromEntries(keyOrKeys.map((k) => [k, data[k]]));
+            } else {
+              result = { ...data };
+            }
+            if (callback) callback(result);
+            return Promise.resolve(result);
+          },
+          set: (items?: unknown, cb?: () => void) => {
+            const callback = typeof items === 'function' ? (items as () => void) : cb;
+            if (items && typeof items === 'object') {
+              Object.assign(data, items);
+            }
+            if (callback) callback();
+            return Promise.resolve();
+          },
+          remove: (keyOrKeys?: unknown, cb?: () => void) => {
+            const callback = typeof keyOrKeys === 'function' ? (keyOrKeys as () => void) : cb;
+            if (typeof keyOrKeys === 'string') {
+              delete data[keyOrKeys];
+            } else if (Array.isArray(keyOrKeys)) {
+              for (const k of keyOrKeys) delete data[k];
+            }
+            if (callback) callback();
+            return Promise.resolve();
+          },
+        };
+      })(),
     },
   };
 });
@@ -91,6 +126,10 @@ describe('AgentLoop — Phase 3 need_visual end-to-end integration', () => {
   let mockTabsSendMessage: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    const st = (globalThis as unknown as { __testStorage?: Record<string, unknown> }).__testStorage;
+    if (st) {
+      for (const k of Object.keys(st)) delete st[k];
+    }
     originalFetch = globalThis.fetch;
 
     // Mock browser tabs API
@@ -897,6 +936,10 @@ describe('AgentLoop — HASTA Controller, Bounded Recovery, and Multi-Action Saf
   let defaultActionResult: ActionResult = { outcome: 'advanced' };
 
   function setupLoop(plans: ActionPlan[], options?: { guardInvocations?: SSG[] }) {
+    const st = (globalThis as unknown as { __testStorage?: Record<string, unknown> }).__testStorage;
+    if (st) {
+      for (const k of Object.keys(st)) delete st[k];
+    }
     executedActions = [];
     actionResults.clear();
     defaultActionResult = { outcome: 'advanced' };
@@ -1443,5 +1486,517 @@ describe('AgentLoop — HASTA Controller, Bounded Recovery, and Multi-Action Saf
     expect(executedActions.some((a) => 'target' in a && a.target === 'e_never_replan_after_blocked')).toBe(false);
     expect(loop.state.phase).toBe('blocked');
     expect(loop.state.message).toContain('token sink binding violation');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 3 — LEKHA Controller Integration Tests
+  // ---------------------------------------------------------------------------
+
+  // 24. Privacy boundaries in action logging (Part J)
+  it('24. Phase 3 (Part J): action logging in LEKHA strictly omits plaintext values, credentials, PII, and DOM details', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          {
+            op: 'type',
+            target: 'e17',
+            value: 'superSecretPassword123',
+            value_ref: '⟦PASSWORD_0⟧',
+          },
+        ],
+        done: false,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e17', {
+      outcome: 'blocked',
+      detail:
+        'REFUSED: ⟦PASSWORD_0⟧ is bound to the field it came from, and e17 is not that field. Extra raw DOM text <div secret="leak">Sensitive User Info 948201 user@secret-gov.in 234567890124</div>',
+    });
+
+    await loop.start('Sensitive test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('blocked');
+    }, { timeout: 3000 });
+
+    const entries = await loop.ledger.list();
+    const actionEntries = entries.filter((e) => e.event_type === 'action');
+    expect(actionEntries.length).toBe(1);
+
+    const actionEntry = actionEntries[0]!;
+    expect(actionEntry.action_op).toBe('type');
+    expect(actionEntry.target_id).toBe('e17');
+    expect(actionEntry.action_outcome).toBe('blocked');
+    expect(actionEntry.reason_code).toBe('SINK_BINDING_VIOLATION');
+
+    // Stringify entire entry and verify absolute zero presence of sensitive tokens / secrets / PII / DOM
+    const serialized = JSON.stringify(actionEntry);
+    expect(serialized).not.toContain('superSecretPassword123');
+    expect(serialized).not.toContain('user@secret-gov.in');
+    expect(serialized).not.toContain('234567890124');
+    expect(serialized).not.toContain('948201');
+    expect(serialized).not.toContain('Sensitive User Info');
+    expect(serialized).not.toContain('<div');
+    expect(serialized).not.toContain('leak');
+    expect(serialized).not.toContain('value');
+    expect(serialized).not.toContain('value_ref');
+
+    // Verify allowed fields only
+    const allowedKeys = new Set([
+      'seq',
+      'ts',
+      'session_id',
+      'trace_id',
+      'step',
+      'tier',
+      'purpose',
+      'origin_class',
+      'event_type',
+      'payload_sha256',
+      'byte_len',
+      'manifest',
+      'outcome',
+      'action_op',
+      'target_id',
+      'action_outcome',
+      'risk',
+      'reason_code',
+      'prev_hash',
+      'entry_hash',
+    ]);
+    for (const key of Object.keys(actionEntry)) {
+      expect(allowedKeys.has(key)).toBe(true);
+    }
+  });
+
+  // 25. Closed loop controller integration test (Part K)
+  it('25. Phase 3 (Part K): closed loop controller integration - previous step failure diagnostic is supplied to next MANTRI context', async () => {
+    const guardInvocations: SSG[] = [];
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [{ op: 'click', target: 'e17' }],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [
+          { op: 'click', target: 'e18' },
+          { op: 'done', summary: 'Recovered after observing target e17 was stale' },
+        ],
+        done: true,
+      },
+    ];
+
+    const loop = setupLoop(plans, { guardInvocations });
+    actionResults.set('e17', {
+      outcome: 'error',
+      detail: 'target no longer on the page',
+    });
+    actionResults.set('e18', {
+      outcome: 'advanced',
+    });
+
+    await loop.start('Target stale recovery loop');
+
+    // Wait for loop to replan and complete
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Step 0 executed click on e17, which failed as TARGET_STALE
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e17')).toBe(true);
+    // Step 1 executed click on e18
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e18')).toBe(true);
+
+    // Verify LEKHA recorded the failure with normalized reason
+    const entries = await loop.ledger.list();
+    const actionEntries = entries.filter((e) => e.event_type === 'action');
+    const step0Action = actionEntries.find((e) => e.target_id === 'e17');
+    expect(step0Action).toBeDefined();
+    expect(step0Action?.action_outcome).toBe('error');
+    expect(step0Action?.reason_code).toBe('TARGET_STALE');
+
+    // Crucial: Step 1 MANTRI context (sent to server/guard in step 1 SSG) received sanitized history with TARGET_STALE
+    expect(guardInvocations.length).toBeGreaterThanOrEqual(2);
+    const step1Ssg = guardInvocations[1]!;
+    expect(step1Ssg.history).toBeDefined();
+    expect(step1Ssg.history?.length).toBeGreaterThanOrEqual(1);
+
+    const staleHistoryItem = step1Ssg.history?.find((h) => h.target === 'e17');
+    expect(staleHistoryItem).toBeDefined();
+    expect(staleHistoryItem?.step).toBe(0);
+    expect(staleHistoryItem?.action).toBe('click');
+    expect(staleHistoryItem?.outcome).toBe('error');
+    expect(staleHistoryItem?.reason_code).toBe('TARGET_STALE');
+  });
+
+  // 26. Multi-step history with different trace IDs in the same session (Part L)
+  it('26. Phase 3 (Part L): multi-step history preserves events across different trace IDs within the same session', async () => {
+    const guardInvocations: SSG[] = [];
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [{ op: 'click', target: 'e1' }],
+        done: false,
+      },
+      {
+        plan_id: 'p1',
+        trace_id: 't_1',
+        actions: [{ op: 'click', target: 'e2' }],
+        done: false,
+      },
+      {
+        plan_id: 'p2',
+        trace_id: 't_2',
+        actions: [{ op: 'scroll', direction: 'down' }],
+        done: false,
+      },
+      {
+        plan_id: 'p3',
+        trace_id: 't_3',
+        actions: [{ op: 'done', summary: 'All multi-step history verified' }],
+        done: true,
+      },
+    ];
+
+    const loop = setupLoop(plans, { guardInvocations });
+    actionResults.set('e1', { outcome: 'advanced' });
+    actionResults.set('e2', { outcome: 'error', detail: 'target no longer on the page' });
+    actionResults.set('scroll', { outcome: 'no_change', detail: 'already at bottom' });
+
+    await loop.start('Multi-step history test');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // In step 3 observation, guardInvocations[3].history must contain all 3 previous actions
+    expect(guardInvocations.length).toBeGreaterThanOrEqual(4);
+    const step3Ssg = guardInvocations[3]!;
+    expect(step3Ssg.history).toBeDefined();
+    expect(step3Ssg.history!.length).toBeGreaterThanOrEqual(3);
+
+    const historyItems = step3Ssg.history!;
+    const e1Hist = historyItems.find((h) => h.target === 'e1');
+    const e2Hist = historyItems.find((h) => h.target === 'e2');
+    const scrollHist = historyItems.find((h) => h.action === 'scroll');
+
+    expect(e1Hist).toMatchObject({ step: 0, action: 'click', target: 'e1', outcome: 'advanced' });
+    expect(e2Hist).toMatchObject({
+      step: 1,
+      action: 'click',
+      target: 'e2',
+      outcome: 'error',
+      reason_code: 'TARGET_STALE',
+    });
+    expect(scrollHist).toMatchObject({ step: 2, action: 'scroll', outcome: 'no_change' });
+  });
+
+  // 27. Session boundary isolation: unrelated sessions never leak history
+  it('27. Phase 3: session isolation prevents history leakage across separate tasks', async () => {
+    const guardInvocations: SSG[] = [];
+    const plansSession1: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'click', target: 'e_task1' },
+          { op: 'done', summary: 'Task 1 done' },
+        ],
+        done: true,
+      },
+    ];
+
+    const loop = setupLoop(plansSession1, { guardInvocations });
+    actionResults.set('e_task1', { outcome: 'advanced' });
+
+    await loop.start('Session 1 task');
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    const session1Entries = await loop.ledger.list();
+    const session1Id = session1Entries[0]?.session_id;
+    expect(session1Id).toBeDefined();
+
+    // Start a completely new session / task
+    const plansSession2: ActionPlan[] = [
+      {
+        plan_id: 'p0_s2',
+        trace_id: 't_0',
+        actions: [
+          { op: 'click', target: 'e_task2' },
+          { op: 'done', summary: 'Task 2 done' },
+        ],
+        done: true,
+      },
+    ];
+
+    // Clear guard invocations to inspect session 2
+    guardInvocations.length = 0;
+    setupLoop(plansSession2, { guardInvocations });
+    actionResults.set('e_task2', { outcome: 'advanced' });
+
+    await loop.start('Session 2 task');
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    const step0Session2Ssg = guardInvocations[0]!;
+    // Session 2 initial step must NOT contain any history from Session 1
+    expect(step0Session2Ssg.history?.some((h) => h.target === 'e_task1') ?? false).toBe(false);
+
+    const session2Entries = await loop.ledger.list();
+    const session2Id = session2Entries.find((e) => e.session_id !== session1Id)?.session_id;
+    expect(session2Id).toBeDefined();
+    expect(session2Id).not.toBe(session1Id);
+
+    // Query sanitized history scoped to session2: strictly zero items from session1
+    const session2History = await loop.ledger.getSanitizedHistory({ sessionId: session2Id });
+    expect(session2History.every((h) => h.target_id !== 'e_task1')).toBe(true);
+  });
+
+  // 28. Multi-action safety: sibling actions aborted on block/error are not logged
+  it('28. Phase 3 (Part C): multi-action plan stops on failure and unattempted sibling actions are never logged', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'click', target: 'e_first_success' },
+          { op: 'type', target: 'e_second_blocked' },
+          { op: 'click', target: 'e_third_unattempted' },
+        ],
+        done: false,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_first_success', { outcome: 'advanced' });
+    actionResults.set('e_second_blocked', { outcome: 'blocked', detail: 'target element is disabled' });
+
+    await loop.start('Multi-action safety logging');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('blocked');
+    }, { timeout: 3000 });
+
+    const entries = await loop.ledger.list();
+    const actionEntries = entries.filter((e) => e.event_type === 'action');
+
+    // Exactly 2 action entries: action 1 (advanced) and action 2 (blocked)
+    expect(actionEntries.length).toBe(2);
+    expect(actionEntries[0]?.target_id).toBe('e_first_success');
+    expect(actionEntries[0]?.action_outcome).toBe('advanced');
+
+    expect(actionEntries[1]?.target_id).toBe('e_second_blocked');
+    expect(actionEntries[1]?.action_outcome).toBe('blocked');
+    expect(actionEntries[1]?.reason_code).toBe('DISABLED_TARGET');
+
+    // Action 3 was never attempted, so it has ZERO entries in the ledger
+    expect(actionEntries.some((e) => e.target_id === 'e_third_unattempted')).toBe(false);
+  });
+
+  // 29. Resilience: diagnostic action logging failure does not crash action execution (Part I)
+  it('29. Phase 3 (Part I): diagnostic action logging failure does not fail browser action or task', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'click', target: 'e_safe_click' },
+          { op: 'done', summary: 'Success despite ledger glitch' },
+        ],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_safe_click', { outcome: 'advanced' });
+
+    // Mock ledger.append to simulate storage write failure for action logging
+    const originalAppend = loop.ledger.append.bind(loop.ledger);
+    vi.spyOn(loop.ledger, 'append').mockImplementation(async (input) => {
+      if (input.event_type === 'action') {
+        throw new Error('Disk full or storage quota exceeded');
+      }
+      return originalAppend(input);
+    });
+
+    await loop.start('Diagnostic failure resilience');
+
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // Task finished cleanly with done, action succeeded without failing
+    expect(loop.state.phase).toBe('done');
+    expect(executedActions.some((a) => 'target' in a && a.target === 'e_safe_click')).toBe(true);
+  });
+
+  // 30. Phase 4: CLEAR_LEDGER empties ledger and maintains strict storage isolation
+  it('30. Phase 4 (Clear & Storage Isolation): clearLedger empties ledger while preserving unrelated storage', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [{ op: 'click', target: 'e_initial' }, { op: 'done', summary: 'Pre-clear done' }],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_initial', { outcome: 'advanced' });
+
+    // Store unrelated extension settings/data
+    await browser.storage.local.set({
+      'prahari.user.settings': { theme: 'dark', overlay: true },
+      'unrelated.third_party_key': 'untouched_data',
+    });
+
+    await loop.start('Pre-clear task');
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    const entriesBefore = await loop.ledger.list();
+    expect(entriesBefore.length).toBeGreaterThan(0);
+    expect(await loop.ledger.verify()).toBeNull();
+
+    // User triggers CLEAR_LEDGER
+    const clearResult = await loop.clearLedger();
+    expect(clearResult.ok).toBe(true);
+
+    // Ledger is now empty and verifies as intact
+    const entriesAfter = await loop.ledger.list();
+    expect(entriesAfter.length).toBe(0);
+    expect(await loop.ledger.verify()).toBeNull();
+
+    // Storage isolation check: unrelated keys MUST NOT be modified or deleted
+    const settings = await browser.storage.local.get('prahari.user.settings');
+    expect(settings['prahari.user.settings']).toEqual({ theme: 'dark', overlay: true });
+
+    const unrelated = await browser.storage.local.get('unrelated.third_party_key');
+    expect(unrelated['unrelated.third_party_key']).toBe('untouched_data');
+
+    // The ledger storage key is removed
+    const ledgerStorage = await browser.storage.local.get('prahari.lekha.v1');
+    expect(ledgerStorage['prahari.lekha.v1']).toBeUndefined();
+  });
+
+  // 31. Phase 4: Subsequent task after clear starts cleanly from genesis without breaking MANTRI
+  it('31. Phase 4 (Post-Clear Continuity): post-clear task restarts from genesis seq 0 and MANTRI succeeds', async () => {
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [{ op: 'click', target: 'e_pre' }, { op: 'done', summary: 'Pre done' }],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    actionResults.set('e_pre', { outcome: 'advanced' });
+
+    await loop.start('First task');
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    // User clears ledger
+    await loop.clearLedger();
+    expect((await loop.ledger.list()).length).toBe(0);
+
+    // New task with new plan
+    const newPlans: ActionPlan[] = [
+      {
+        plan_id: 'p1',
+        trace_id: 't_0',
+        actions: [
+          { op: 'type', target: 'e_post_clear' },
+          { op: 'done', summary: 'Post-clear task complete' },
+        ],
+        done: true,
+      },
+    ];
+    plans.push(newPlans[0]!);
+    actionResults.set('e_post_clear', { outcome: 'advanced' });
+
+    await loop.start('Post-clear task');
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('done');
+    }, { timeout: 3000 });
+
+    const entries = await loop.ledger.list();
+    expect(entries.length).toBeGreaterThan(0);
+
+    // Genesis restart verification: first entry has seq 0 and 64-zero prev_hash
+    expect(entries[0]?.seq).toBe(0);
+    expect(entries[0]?.prev_hash).toBe('0'.repeat(64));
+
+    // Full chain integrity check
+    expect(await loop.ledger.verify()).toBeNull();
+  });
+
+  // 32. Phase 4 Privacy Test: fake sensitive credentials never enter storage or sanitized history
+  it('32. Phase 4 (Privacy Boundary Test): sensitive credentials never appear in ledger storage or sanitized history', async () => {
+    const fakeSecret = 'SuperSecretOtp#987654';
+    const fakeAadhaar = '9999 8888 7777';
+    const fakeEmail = 'citizen@prahari.nic.in';
+    const fakePhone = '+91 9123456780';
+    const fakeDom = '<input type="password" value="SuperSecretOtp#987654" name="pin">';
+
+    const plans: ActionPlan[] = [
+      {
+        plan_id: 'p0',
+        trace_id: 't_0',
+        actions: [
+          { op: 'type', target: 'e_pin' },
+          { op: 'done', summary: 'Done' },
+        ],
+        done: true,
+      },
+    ];
+    const loop = setupLoop(plans);
+    // Action fails with sink binding violation
+    actionResults.set('e_pin', { outcome: 'blocked', detail: 'sink binding violation' });
+
+    await loop.start('Sensitive form fill');
+    await vi.waitFor(() => {
+      expect(loop.state.phase).toBe('blocked');
+    }, { timeout: 3000 });
+
+    const entries = await loop.ledger.list();
+    const actionEntry = entries.find((e) => e.event_type === 'action');
+    expect(actionEntry).toBeDefined();
+
+    // The action entry records ONLY sanitized diagnostic metadata
+    expect(actionEntry?.action_op).toBe('type');
+    expect(actionEntry?.target_id).toBe('e_pin');
+    expect(actionEntry?.action_outcome).toBe('blocked');
+    expect(actionEntry?.reason_code).toBe('SINK_BINDING_VIOLATION');
+
+    // Direct check of raw storage: NO secret values were serialized
+    const bag = await browser.storage.local.get('prahari.lekha.v1');
+    const rawStorageStr = JSON.stringify(bag);
+
+    expect(rawStorageStr.includes(fakeSecret)).toBe(false);
+    expect(rawStorageStr.includes(fakeAadhaar)).toBe(false);
+    expect(rawStorageStr.includes(fakeEmail)).toBe(false);
+    expect(rawStorageStr.includes(fakePhone)).toBe(false);
+    expect(rawStorageStr.includes(fakeDom)).toBe(false);
+
+    // MANTRI sanitized history also contains zero secret values
+    const sanitizedHistory = await loop.ledger.getSanitizedHistory();
+    const historyStr = JSON.stringify(sanitizedHistory);
+
+    expect(historyStr.includes(fakeSecret)).toBe(false);
+    expect(historyStr.includes(fakeAadhaar)).toBe(false);
+    expect(historyStr.includes(fakeEmail)).toBe(false);
+    expect(historyStr.includes(fakePhone)).toBe(false);
+    expect(historyStr.includes(fakeDom)).toBe(false);
   });
 });
