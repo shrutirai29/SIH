@@ -26,14 +26,7 @@ import {
 } from '../shared/messages.js';
 
 import { CONFIG } from '../shared/config.js';
-import {
-  DEFAULT_PROFILE,
-  getStoredProfile,
-  saveStoredProfile,
-  getSavedFields,
-  deleteSavedField,
-  type UserProfile,
-} from '../shared/profile.js';
+import { DEFAULT_PROFILE, getStoredProfile, saveStoredProfile, type UserProfile } from '../shared/profile.js';
 import { DiffViewer } from './DiffViewer.js';
 
 type MainTab = 'task' | 'ledger' | 'profile';
@@ -52,7 +45,6 @@ const PHASE_LABEL: Record<AgentState['phase'], string> = {
   sending: 'Guard check',
   thinking: 'Server planning',
   acting: 'Acting',
-  asking: 'Needs info',
   done: 'Done',
   blocked: 'Blocked',
   error: 'Error',
@@ -88,7 +80,6 @@ export function App(): React.JSX.Element {
 
   const [userProfile, setUserProfile] = useState<UserProfile>(DEFAULT_PROFILE);
   const [profileSavedMsg, setProfileSavedMsg] = useState(false);
-  const [autoFillPrefilled, setAutoFillPrefilled] = useState(true);
 
   useEffect(() => {
     getStoredProfile().then((p) => setUserProfile(p));
@@ -131,28 +122,14 @@ export function App(): React.JSX.Element {
 
       // Default selectedTabId to the currently active tab if not set or invalid
       if (filtered.length > 0) {
-        let activeTabId: number | undefined;
-        try {
-          const [active] = await browser.tabs.query({ active: true, lastFocusedWindow: true });
-          if (active?.id !== undefined && filtered.some((f) => f.id === active.id)) {
-            activeTabId = active.id;
+        const [active] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (active?.id !== undefined && filtered.some((f) => f.id === active.id)) {
+          setSelectedTabId((prev) => (prev !== null && filtered.some((f) => f.id === prev) ? prev : active.id!));
+        } else {
+          const firstId = filtered[0]?.id;
+          if (firstId !== undefined) {
+            setSelectedTabId((prev) => (prev !== null && filtered.some((f) => f.id === prev) ? prev : firstId));
           }
-        } catch {
-          // ignore
-        }
-        if (activeTabId === undefined) {
-          try {
-            const [active] = await browser.tabs.query({ active: true, currentWindow: true });
-            if (active?.id !== undefined && filtered.some((f) => f.id === active.id)) {
-              activeTabId = active.id;
-            }
-          } catch {
-            // ignore
-          }
-        }
-        const candidateId = activeTabId ?? filtered[0]?.id;
-        if (candidateId !== undefined) {
-          setSelectedTabId((prev) => (prev !== null && filtered.some((f) => f.id === prev) ? prev : candidateId));
         }
       }
     } catch (err) {
@@ -164,22 +141,7 @@ export function App(): React.JSX.Element {
     void refreshTabs();
 
     const handleActivated = (activeInfo: { tabId: number }) => {
-      browser.tabs
-        .get(activeInfo.tabId)
-        .then((tab) => {
-          const u = tab?.url || '';
-          if (
-            tab?.id !== undefined &&
-            !u.startsWith('chrome://') &&
-            !u.startsWith('chrome-extension://') &&
-            !u.startsWith('edge://') &&
-            !u.startsWith('about:') &&
-            !u.startsWith('moz-extension://')
-          ) {
-            setSelectedTabId(tab.id);
-          }
-        })
-        .catch(() => {});
+      setSelectedTabId(activeInfo.tabId);
       void refreshTabs();
     };
 
@@ -189,18 +151,12 @@ export function App(): React.JSX.Element {
       }
     };
 
-    const handleCreated = () => {
-      void refreshTabs();
-    };
-
     browser.tabs.onActivated.addListener(handleActivated);
     browser.tabs.onUpdated.addListener(handleUpdated);
-    browser.tabs.onCreated.addListener(handleCreated);
 
     return () => {
       browser.tabs.onActivated.removeListener(handleActivated);
       browser.tabs.onUpdated.removeListener(handleUpdated);
-      browser.tabs.onCreated.removeListener(handleCreated);
     };
   }, [refreshTabs]);
 
@@ -258,38 +214,7 @@ export function App(): React.JSX.Element {
   }, [mainTab, currentState?.step, refreshLedger]);
 
   const start = async (): Promise<void> => {
-    const currentGoal =
-      goal.trim() ||
-      (document.querySelector('textarea') as HTMLTextAreaElement | null)?.value?.trim() ||
-      '';
-    if (currentGoal.length === 0) return;
-
-    let targetTabId = selectedTabId;
-    const isTargetValid = availableTabs.some((t) => t.id === targetTabId);
-    if (!isTargetValid) {
-      targetTabId = availableTabs[0]?.id ?? null;
-      if (targetTabId === null) {
-        try {
-          const allTabs = await browser.tabs.query({});
-          const isWeb = (u?: string) =>
-            Boolean(
-              u &&
-                !u.startsWith('chrome://') &&
-                !u.startsWith('chrome-extension://') &&
-                !u.startsWith('edge://') &&
-                !u.startsWith('about:') &&
-                !u.startsWith('moz-extension://'),
-            );
-          const candidate = allTabs.find((t) => isWeb(t.url));
-          targetTabId = candidate?.id ?? null;
-        } catch {
-          // ignore
-        }
-      }
-      if (targetTabId !== null) {
-        setSelectedTabId(targetTabId);
-      }
-    }
+    if (goal.trim().length === 0 || selectedTabId === null) return;
 
     setBusy(true);
     setSelfTest(null);
@@ -297,29 +222,13 @@ export function App(): React.JSX.Element {
     try {
       await browser.runtime.sendMessage({
         kind: 'START_TASK',
-        tabId: targetTabId ?? undefined,
-        goal: currentGoal,
-        autoFillPrefilled,
-        userProfile,
+        tabId: selectedTabId,
+        goal: goal.trim(),
       });
     } catch (err) {
       console.error('Failed to start task:', err);
     } finally {
       setBusy(false);
-    }
-  };
-
-  const answerQuestion = async (fieldKey: string, value: string): Promise<void> => {
-    if (selectedTabId === null) return;
-    try {
-      await browser.runtime.sendMessage({
-        kind: 'ANSWER_QUESTION',
-        tabId: selectedTabId,
-        fieldKey,
-        value,
-      });
-    } catch (err) {
-      console.error('Failed to send answer:', err);
     }
   };
 
@@ -659,13 +568,29 @@ export function App(): React.JSX.Element {
             />
           </label>
 
+          <label className="toggle" style={{ marginBottom: '10px' }}>
+            <input
+              type="checkbox"
+              checked={userProfile.usePrefilledData !== false}
+              onChange={(e) => {
+                const updated = { ...userProfile, usePrefilledData: e.target.checked };
+                void handleSaveProfile(updated);
+              }}
+              disabled={running}
+            />
+            <span>
+              <strong>Use saved profile data for prefilling forms</strong>
+              <em>Uncheck if you want PRAHARI to only fill values from your prompt or ask conversationally.</em>
+            </span>
+          </label>
+
           <div className="row">
             <button
               className="primary"
               onClick={() => void start()}
-              disabled={running || busy}
+              disabled={running || busy || selectedTabId === null}
             >
-              Run
+              Run on Selected Tab
             </button>
 
             <button
@@ -677,19 +602,7 @@ export function App(): React.JSX.Element {
             </button>
           </div>
 
-          <StatusCard state={currentState} onAnswer={answerQuestion} />
-
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={autoFillPrefilled}
-              onChange={(e) => setAutoFillPrefilled(e.target.checked)}
-            />
-            <span>
-              <strong>Use saved profile to fill known fields</strong>
-              <em>When ON, PRAHARI fills name/email/phone from your Profile tab. When OFF it asks you for every value it needs.</em>
-            </span>
-          </label>
+          <StatusCard state={currentState} />
 
           <label className="toggle">
             <input
@@ -775,14 +688,9 @@ export function App(): React.JSX.Element {
 
 function StatusCard({
   state,
-  onAnswer,
 }: {
   state: AgentState | null;
-  onAnswer: (fieldKey: string, value: string) => void;
 }): React.JSX.Element {
-  const [answerText, setAnswerText] = useState('');
-  const [saveForFuture, setSaveForFuture] = useState(true);
-
   if (state === null) {
     return (
       <section className="card">
@@ -790,30 +698,6 @@ function StatusCard({
       </section>
     );
   }
-
-  const isAsking = state.phase === 'asking' && state.pendingQuestion !== undefined;
-
-  const submitAnswer = async (val: string): Promise<void> => {
-    if (!val.trim() || !state?.pendingQuestion) return;
-    const cleanVal = val.trim();
-    const fKey = state.pendingQuestion.fieldKey;
-
-    if (saveForFuture) {
-      try {
-        await browser.runtime.sendMessage({
-          kind: 'SAVE_FIELD',
-          fieldKey: fKey,
-          label: fKey,
-          value: cleanVal,
-        });
-      } catch (err) {
-        console.warn('Failed to save field for future:', err);
-      }
-    }
-
-    onAnswer(fKey, cleanVal);
-    setAnswerText('');
-  };
 
   return (
     <section className={'card status ' + state.phase}>
@@ -829,101 +713,6 @@ function StatusCard({
       </div>
 
       <p className="msg">{state.message}</p>
-
-      {/* ── Conversational Q&A bubble ── */}
-      {isAsking && state.pendingQuestion ? (
-        <div
-          style={{
-            marginTop: '10px',
-            padding: '12px',
-            borderRadius: '10px',
-            background: 'rgba(59,130,246,0.12)',
-            border: '1px solid rgba(59,130,246,0.4)',
-          }}
-        >
-          <p style={{ margin: '0 0 8px 0', fontWeight: 600, fontSize: '13px', color: '#93c5fd' }}>
-            🤖 PRAHARI needs to know:
-          </p>
-          <p style={{ margin: '0 0 10px 0', fontSize: '13px' }}>
-            {state.pendingQuestion.question}
-          </p>
-
-          {/* Quick-pick option buttons */}
-          {state.pendingQuestion.options && state.pendingQuestion.options.length > 0 ? (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
-              {state.pendingQuestion.options.map((opt) => (
-                <button
-                  key={opt}
-                  style={{
-                    padding: '4px 10px',
-                    fontSize: '12px',
-                    borderRadius: '14px',
-                    background: 'rgba(59,130,246,0.2)',
-                    border: '1px solid rgba(59,130,246,0.5)',
-                    color: '#93c5fd',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => void submitAnswer(opt)}
-                >
-                  {opt}
-                </button>
-              ))}
-            </div>
-          ) : null}
-
-          {/* Free-text input */}
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <input
-              type="text"
-              value={answerText}
-              placeholder="Type your answer…"
-              onChange={(e) => setAnswerText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void submitAnswer(answerText); }}
-              style={{
-                flex: 1,
-                padding: '6px 10px',
-                borderRadius: '8px',
-                border: '1px solid rgba(59,130,246,0.4)',
-                background: 'var(--surface)',
-                color: 'inherit',
-                font: 'inherit',
-                fontSize: '12px',
-              }}
-              autoFocus
-            />
-            <button
-              className="primary"
-              style={{ padding: '6px 14px', fontSize: '12px' }}
-              onClick={() => void submitAnswer(answerText)}
-              disabled={!answerText.trim()}
-            >
-              Send
-            </button>
-          </div>
-
-          {/* Option to save answer forever for future use */}
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              marginTop: '10px',
-              fontSize: '12px',
-              color: '#93c5fd',
-              cursor: 'pointer',
-              userSelect: 'none',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={saveForFuture}
-              onChange={(e) => setSaveForFuture(e.target.checked)}
-              style={{ accentColor: '#3b82f6', cursor: 'pointer' }}
-            />
-            <span>💾 Save this answer forever for future use</span>
-          </label>
-        </div>
-      ) : null}
 
       <dl className="metrics">
         <div>
@@ -951,7 +740,6 @@ function StatusCard({
   );
 }
 
-
 function LedgerView({
   entries,
   onRefresh,
@@ -963,13 +751,6 @@ function LedgerView({
 }): React.JSX.Element {
   return (
     <main className="pane ledger-pane">
-      <section className="card">
-        <h2>Privacy ledger (LEKHA)</h2>
-        <p className="muted">
-          Tamper-evident local record of agent activity. Sensitive values are not stored.
-        </p>
-      </section>
-
       <div className="row">
         <button onClick={onRefresh}>↻ Refresh</button>
         <span className="grow" />
@@ -993,9 +774,9 @@ function LedgerView({
                 <button
                   className="diff-btn"
                   onClick={() => onInspect(entry.trace_id)}
-                  title="What the server saw"
+                  title="Inspect what the server saw"
                 >
-                  What the server saw →
+                  Inspect Diff →
                 </button>
               </div>
               <div className="lbody">
@@ -1045,26 +826,10 @@ function ProfileView({
   onSave: (p: UserProfile) => void;
 }): React.JSX.Element {
   const [form, setForm] = useState<UserProfile>(profile);
-  const [savedFields, setSavedFields] = useState<Record<string, string>>({});
-
-  const loadSavedFields = useCallback(async () => {
-    try {
-      const fields = await getSavedFields();
-      setSavedFields(fields);
-    } catch {
-      setSavedFields({});
-    }
-  }, []);
 
   useEffect(() => {
     setForm(profile);
-    void loadSavedFields();
-  }, [profile, loadSavedFields]);
-
-  const handleDeleteSavedField = async (key: string) => {
-    await deleteSavedField(key);
-    await loadSavedFields();
-  };
+  }, [profile]);
 
   return (
     <main className="pane">
@@ -1092,6 +857,18 @@ function ProfileView({
         ) : null}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <label className="toggle" style={{ margin: '0 0 4px 0', padding: '10px', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+            <input
+              type="checkbox"
+              checked={form.usePrefilledData !== false}
+              onChange={(e) => setForm({ ...form, usePrefilledData: e.target.checked })}
+            />
+            <span>
+              <strong>Automatically use prefilled profile data</strong>
+              <em>When enabled, PRAHARI uses saved profile details for matching form fields. If disabled, it only fills what you type in prompt or asks conversationally.</em>
+            </span>
+          </label>
+
           <label className="field" style={{ margin: 0 }}>
             <span>Full Name</span>
             <input
@@ -1149,61 +926,6 @@ function ProfileView({
           >
             💾 Save Profile Details
           </button>
-        </div>
-
-        {/* Saved Custom Fields (Gender, City, etc.) */}
-        <div style={{ marginTop: '22px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <h3 style={{ fontSize: '13px', margin: 0, color: 'var(--text)' }}>
-              🧠 Learned Custom Fields ({Object.keys(savedFields).length})
-            </h3>
-            <button
-              style={{ padding: '2px 8px', fontSize: '11px' }}
-              onClick={() => void loadSavedFields()}
-            >
-              ↻ Refresh
-            </button>
-          </div>
-          <p className="muted" style={{ fontSize: '11px', margin: '0 0 10px 0' }}>
-            When unknown fields (e.g. Gender, State) occur in forms, you can save your answer forever. PRAHARI remembers and re-uses them here.
-          </p>
-
-          {Object.keys(savedFields).length === 0 ? (
-            <p className="muted" style={{ fontSize: '12px', fontStyle: 'italic', margin: 0 }}>
-              No custom fields saved yet. When a form asks for an unknown field, keep "Save this answer forever" checked to remember it.
-            </p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {Object.entries(savedFields).map(([k, v]) => (
-                <div
-                  key={k}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '6px 10px',
-                    borderRadius: '6px',
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    fontSize: '12px',
-                  }}
-                >
-                  <div>
-                    <strong style={{ color: 'var(--accent)' }}>{k}:</strong>{' '}
-                    <span>{v}</span>
-                  </div>
-                  <button
-                    className="danger"
-                    style={{ padding: '2px 6px', fontSize: '10px' }}
-                    onClick={() => void handleDeleteSavedField(k)}
-                    title="Delete saved field"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </section>
     </main>

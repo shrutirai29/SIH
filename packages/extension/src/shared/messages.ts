@@ -18,33 +18,7 @@ export interface StartTask {
   goal: string;
   /** The tab the task should run on. Required when sent from the side panel. */
   tabId: number;
-  /** When true, the agent may use saved profile data to fill known fields. */
-  autoFillPrefilled?: boolean | undefined;
-  userProfile?: unknown;
-}
-
-/** Side panel sends this when the user has answered a clarifying question. */
-export interface AnswerQuestion {
-  kind: 'ANSWER_QUESTION';
-  tabId: number;
-  /** The field/key the question was about. */
-  fieldKey: string;
-  /** The user-supplied value. */
-  value: string;
-}
-
-/**
- * Side panel sends this when the user wants to save a field answer permanently
- * so it is auto-filled in future tasks without asking again.
- */
-export interface SaveField {
-  kind: 'SAVE_FIELD';
-  /** A stable key identifying the field (e.g. "gender", "state", "field_2"). */
-  fieldKey: string;
-  /** Human-readable label to show in the saved fields list (e.g. "Gender"). */
-  label: string;
-  /** The value to save. */
-  value: string;
+  autoFillPrefilled?: boolean;
 }
 export interface StopTask {
   kind: 'STOP_TASK';
@@ -88,9 +62,6 @@ export interface ExtractScreen {
   step: number;
   traceId: string;
   sessionId: string;
-  autoFillPrefilled?: boolean | undefined;
-  userProfile?: unknown;
-  userAnswers?: Record<string, string> | undefined;
 }
 export interface ExecuteAction {
   kind: 'EXECUTE_ACTION';
@@ -119,13 +90,6 @@ export interface SetMascotVisible {
   visible: boolean;
 }
 
-export interface SetMascotTheme {
-  kind: 'SET_MASCOT_THEME';
-  themeIndex?: number | undefined;
-  themeName?: string | undefined;
-  tabNumber?: number | undefined;
-}
-
 /**
  * Sent to the currently-focused tab when a *different* tab's task reaches a
  * terminal phase. The receiving content script shows a cross-tab toast.
@@ -145,6 +109,13 @@ export interface TaskNotify {
 export interface FocusTab {
   kind: 'FOCUS_TAB';
   tabId: number;
+}
+
+export interface SetMascotTheme {
+  kind: 'SET_MASCOT_THEME';
+  themeIndex?: number;
+  themeName?: string;
+  tabNumber?: number;
 }
 
 export type MascotMood = 'idle' | 'working' | 'thinking' | 'success' | 'error';
@@ -173,11 +144,9 @@ export type Request =
   | DetectFaces
   | ToggleMascot
   | SetMascotVisible
-  | SetMascotTheme
   | TaskNotify
   | FocusTab
-  | AnswerQuestion
-  | SaveField;
+  | SetMascotTheme;
 
 /* ------------------------------------------------------------------- responses */
 
@@ -188,21 +157,10 @@ export type AgentPhase =
   | 'sending'
   | 'thinking'
   | 'acting'
-  | 'asking'
   | 'done'
   | 'blocked'
   | 'error'
   | 'interrupted';
-
-/** A clarifying question the agent needs the user to answer before it can proceed. */
-export interface AgentQuestion {
-  /** Identifies the field/slot this question is about (e.g. "address", "subject"). */
-  fieldKey: string;
-  /** Human-readable question shown to the user. */
-  question: string;
-  /** Optional hint labels for quick-pick buttons. */
-  options?: string[] | undefined;
-}
 
 export interface AgentState {
   phase: AgentPhase;
@@ -211,10 +169,8 @@ export interface AgentState {
   /** The browser tab this task is bound to. */
   tabId: number;
   /** Sequential human-friendly tab number (1, 2, 3...). */
-  tabNumber?: number | undefined;
+  tabNumber?: number;
   goal: string;
-  /** Set when phase === 'asking'. The agent is waiting for a user answer. */
-  pendingQuestion?: AgentQuestion | undefined;
   step: number;
   tier: 0 | 1 | 2;
   /** Human-readable line for the status area. Never contains page values. */
@@ -323,11 +279,4 @@ export const PANEL_PORT = 'prahari-panel';
 export interface PanelPush {
   kind: 'STATE_UPDATE';
   state: AgentState;
-}
-
-/** Sent by background to the side panel when the agent needs a user answer. */
-export interface QuestionPush {
-  kind: 'AGENT_QUESTION';
-  tabId: number;
-  question: AgentQuestion;
 }

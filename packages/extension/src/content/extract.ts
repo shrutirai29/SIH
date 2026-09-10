@@ -25,7 +25,7 @@ import { CONFIG } from '../shared/config.js';
 import { createEphemeralSession, getSession, type KavachSession } from './session.js';
 import { isOverlayNode, setMarks } from './overlay.js';
 
-import { getStoredProfile, getSavedFields } from '../shared/profile.js';
+import { getStoredProfile } from '../shared/profile.js';
 
 const INTERACTIVE = [
   'a[href]', 'button', 'input:not([type=hidden])', 'select', 'textarea',
@@ -299,9 +299,7 @@ export interface ExtractOptions {
    * destroy the vault of a task that is mid-flight, or repoint the element ids the
    * executor is about to resolve.
    */
-  ephemeral?: boolean | undefined;
-  autoFillPrefilled?: boolean | undefined;
-  userAnswers?: Record<string, string> | undefined;
+  ephemeral?: boolean;
 }
 
 export interface ExtractOutput {
@@ -492,26 +490,16 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
   // closed — and the user saw `PII_DETECTED` with nothing connecting it to what they
   // had typed. Redacting it turns a dead end into the feature working: the planner
   // gets `⟦AADHAAR_1⟧` and can ask for it back by reference.
+  const profile = await getStoredProfile();
+  const usePrefill = profile?.usePrefilledData !== false;
   let augmentedGoal = opts.goal;
-  if (opts.autoFillPrefilled) {
-    const profile = await getStoredProfile();
-    const savedFields = await getSavedFields();
-    const allAnswers = { ...savedFields, ...(opts.userAnswers || {}) };
+  if (usePrefill && profile && (profile.fullName || profile.enrollmentNo || profile.phone || profile.email || profile.dob)) {
     const pDetails: string[] = [];
-    if (profile) {
-      if (profile.fullName) pDetails.push(`name ${profile.fullName}`);
-      if (profile.enrollmentNo) pDetails.push(`roll ${profile.enrollmentNo}`);
-      if (profile.phone) pDetails.push(`mobile ${profile.phone}`);
-      if (profile.email) pDetails.push(`email ${profile.email}`);
-      if (profile.dob) pDetails.push(`date ${profile.dob}`);
-    }
-
-    for (const [key, val] of Object.entries(allAnswers)) {
-      if (typeof val === 'string' && val.trim().length > 0) {
-        pDetails.push(`${key} ${val.trim()}`);
-      }
-    }
-
+    if (profile.fullName) pDetails.push(`name ${profile.fullName}`);
+    if (profile.enrollmentNo) pDetails.push(`roll ${profile.enrollmentNo}`);
+    if (profile.phone) pDetails.push(`mobile ${profile.phone}`);
+    if (profile.email) pDetails.push(`email ${profile.email}`);
+    if (profile.dob) pDetails.push(`date ${profile.dob}`);
     if (pDetails.length > 0) {
       augmentedGoal = `${opts.goal} [SavedProfile: ${pDetails.join(', ')}]`;
     }
@@ -524,18 +512,7 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
     originOrigin: session.origin,
   });
 
-  // Counts are derived from the DISTINCT tokens the VAULT MINTED, not by summing what
-  // each redactText call reported. The same value is scanned several times per element
-  // (value, defaultValue, aria-label, data-*), and summing made the manifest claim
-  // three Aadhaar numbers where the screen held one. The manifest is what the server
-  // reasons about, so an inflated count is a lie it will act on. (TODO.md bug #8)
-  //
-  // Deriving it from the VAULT rather than from the payload also restores the egress
-  // guard's check 6. Scanning the payload for tokens made the manifest a description
-  // of whatever the payload happened to contain — including a token a hostile page had
-  // written into its own text, which was then dutifully declared, and check 6 compared
-  // the payload against itself. The vault is the one source no page can reach.
-  const counts = countMintedTokens(session, elements, textBlocks, title.text);
+  const counts = countMintedTokens(session, elements, textBlocks, title.text, goal.text);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   void allCounts;
 
@@ -547,6 +524,7 @@ export async function extractScreen(opts: ExtractOptions): Promise<ExtractOutput
     tier: 1,
     purpose: 'assist-user-task',
     goal: goal.text as RedactedText,
+    auto_fill_prefilled: usePrefill,
     viewport: {
       w: Math.round(window.innerWidth),
       h: Math.round(window.innerHeight),
@@ -617,6 +595,7 @@ function countMintedTokens(
   elements: readonly SsgElement[],
   textBlocks: NonNullable<SSG['text_blocks']>,
   title: string,
+  goal?: string,
 ): Record<string, number> {
   const counts: Record<string, number> = {};
   const seen = new Set<string>();
@@ -645,6 +624,7 @@ function countMintedTokens(
   }
   for (const b of textBlocks) scan(b.text);
   scan(title);
+  scan(goal);
 
   return counts;
 }

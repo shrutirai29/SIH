@@ -39,8 +39,6 @@ browser.runtime.onMessage.addListener((raw: unknown): Promise<unknown> | undefin
       step: m.step,
       traceId: m.traceId,
       sessionId: m.sessionId,
-      autoFillPrefilled: m.autoFillPrefilled,
-      userAnswers: m.userAnswers,
     });
   }
 

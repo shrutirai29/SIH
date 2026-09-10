@@ -12,7 +12,6 @@
 import { browser } from '../platform/index.js';
 import { AgentLoop } from './agent-loop.js';
 import type { AgentState } from '../shared/messages.js';
-import type { UserProfile } from '../shared/profile.js';
 
 /** Phases that mean a loop has finished and its slot can be freely reused. */
 const TERMINAL_PHASES = new Set(['idle', 'done', 'blocked', 'error', 'interrupted']);
@@ -72,15 +71,7 @@ export class AgentManager {
    * Rejects if a non-terminal task is already running there — the user must
    * explicitly stop it first rather than silently killing it.
    */
-  async start(
-    tabId: number,
-    goal: string,
-    opts?: {
-      autoFillPrefilled?: boolean | undefined;
-      userProfile?: UserProfile | undefined;
-      savedFields?: Record<string, string> | undefined;
-    },
-  ): Promise<AgentState> {
+  async start(tabId: number, goal: string): Promise<AgentState> {
     const existing = this.#loops.get(tabId);
     if (existing && !TERMINAL_PHASES.has(existing.state.phase)) {
       throw new Error('A task is already running on this tab.');
@@ -88,7 +79,7 @@ export class AgentManager {
     // Replace the old (terminal) loop with a fresh instance so taskId rotates.
     const loop = new AgentLoop(tabId);
     this.#registerLoop(tabId, loop);
-    return loop.start(goal, opts);
+    return loop.start(goal);
   }
 
   /**
@@ -127,8 +118,18 @@ export class AgentManager {
 
     browser.tabs.onUpdated.addListener(
       (tabId: number, changeInfo: { url?: string; status?: string }) => {
-        // Only real navigations (url change), not hash/query updates.
+        // Only real navigations away from target web pages, ignoring internal browser schemes
         if (changeInfo.url) {
+          const u = changeInfo.url;
+          if (
+            u.startsWith('chrome://') ||
+            u.startsWith('chrome-extension://') ||
+            u.startsWith('about:') ||
+            u.startsWith('edge://') ||
+            u.startsWith('moz-extension://')
+          ) {
+            return;
+          }
           this.interrupt(tabId);
         }
       },

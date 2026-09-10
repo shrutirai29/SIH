@@ -78,19 +78,11 @@ class ChromeOffscreenHost implements InferenceHost {
   }
 
   async ping(): Promise<{ ok: boolean; host: string }> {
-    try {
-      await this.ensure();
-      const replyPromise = browser.runtime.sendMessage({ kind: 'HOST_PING' }) as Promise<
-        { ok: boolean; host: string } | undefined
-      >;
-      const timeoutPromise = new Promise<{ ok: boolean; host: string }>((resolve) =>
-        setTimeout(() => resolve({ ok: false, host: 'offscreen (timeout)' }), 2000),
-      );
-      const reply = await Promise.race([replyPromise, timeoutPromise]);
-      return reply ?? { ok: false, host: 'offscreen (no reply)' };
-    } catch {
-      return { ok: false, host: 'offscreen (error)' };
-    }
+    await this.ensure();
+    const reply = (await browser.runtime.sendMessage({ kind: 'HOST_PING' })) as
+      | { ok: boolean; host: string }
+      | undefined;
+    return reply ?? { ok: false, host: 'offscreen (no reply)' };
   }
 
   async teardown(): Promise<void> {
@@ -130,40 +122,27 @@ export function createInferenceHost(target: BrowserTarget = detectTarget()): Inf
 
 /** Opens the extension's own UI surface, whatever it is called in this browser. */
 export async function openPanel(tabId: number | undefined): Promise<void> {
-  const api = browser as unknown as {
+  const api = (globalThis as unknown as { chrome?: { sidePanel?: { open: (o: { tabId?: number }) => Promise<void> } } }).chrome || (browser as unknown as {
     sidePanel?: { open: (o: { tabId?: number }) => Promise<void> };
     sidebarAction?: { open: () => Promise<void> };
-  };
+  });
+
   if (api.sidePanel !== undefined) {
-    await api.sidePanel.open(tabId === undefined ? {} : { tabId });
+    try {
+      await api.sidePanel.open(tabId === undefined ? {} : { tabId });
+    } catch {
+      // Safe catch: sidePanel.open requires user gesture in certain contexts
+    }
     return;
   }
-  if (api.sidebarAction !== undefined) {
-    await api.sidebarAction.open();
+  const fb = browser as unknown as { sidebarAction?: { open: () => Promise<void> } };
+  if (fb.sidebarAction !== undefined) {
+    try {
+      await fb.sidebarAction.open();
+    } catch {
+      // Safe catch
+    }
   }
 }
 
-import {
-  captureActiveTab as _captureActiveTab,
-  type CaptureOptions,
-  type CapturedTab,
-  extractPngDimensions,
-  extractJpegDimensions,
-  parseDataUrl,
-  bytesToBase64,
-} from './capture.js';
-
-export async function captureActiveTab(options: CaptureOptions = {}): Promise<CapturedTab | null> {
-  return _captureActiveTab(options, browser);
-}
-
-export {
-  extractPngDimensions,
-  extractJpegDimensions,
-  parseDataUrl,
-  bytesToBase64,
-  type CaptureOptions,
-  type CapturedTab,
-};
-export * from './visual-redactor.js';
 export { browser };

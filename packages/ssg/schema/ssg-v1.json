@@ -16,6 +16,7 @@
     "tier": { "enum": [0, 1, 2] },
     "purpose": { "type": "string", "maxLength": 64 },
     "goal": { "$ref": "#/$defs/SafeText" },
+    "auto_fill_prefilled": { "type": "boolean" },
     "viewport": { "$ref": "#/$defs/Viewport" },
     "page": { "$ref": "#/$defs/Page" },
     "elements": { "type": "array", "maxItems": 400, "items": { "$ref": "#/$defs/Element" } },
@@ -133,8 +134,7 @@
         "step": { "type": "integer", "minimum": 0 },
         "action": { "type": "string", "maxLength": 32 },
         "target": { "type": "string", "maxLength": 16 },
-        "outcome": { "enum": ["advanced", "no_change", "error", "blocked"] },
-        "reason_code": { "type": "string", "maxLength": 32 }
+        "outcome": { "enum": ["advanced", "no_change", "error", "blocked"] }
       }
     },
     "Attachment": {
@@ -147,13 +147,12 @@
           "required": ["format", "w", "h", "sha256", "redacted"],
           "additionalProperties": false,
           "properties": {
-            "format": { "enum": ["jpeg", "png"] },
+            "format": { "const": "jpeg" },
             "w": { "type": "integer" },
             "h": { "type": "integer" },
             "q": { "type": "integer", "minimum": 1, "maximum": 100 },
             "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "redacted": { "const": true },
-            "data": { "type": "string" }
+            "redacted": { "const": true }
           }
         }
       }

@@ -88,7 +88,6 @@ export interface HistoryItem {
   action: string;
   target?: string;
   outcome: Outcome;
-  reason_code?: string;
 }
 
 export interface RedactionManifest {
@@ -103,13 +102,12 @@ export interface RedactionManifest {
 
 export interface Attachment {
   screenshot: {
-    format: 'jpeg' | 'png';
+    format: 'jpeg';
     w: number;
     h: number;
     q?: number;
     sha256: string;
     redacted: true;
-    data?: string;
   };
 }
 
@@ -121,6 +119,7 @@ export interface SSG {
   tier: Tier;
   purpose: string;
   goal: RedactedText;
+  auto_fill_prefilled?: boolean;
   viewport: Viewport;
   page: Page;
   elements: Element[];

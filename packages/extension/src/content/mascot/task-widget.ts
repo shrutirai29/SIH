@@ -49,35 +49,31 @@ export class TaskProgressWidget {
 
   private syncTasksFromAgentState(state: Partial<AgentState>): void {
     const taskList: MascotTaskItem[] = [];
-    const phase = state.phase ?? 'idle';
-    const step = state.step ?? 0;
-    const redactionCount = state.redactionCount ?? 0;
-    const message = state.message ?? '';
 
     taskList.push({
       id: 'step-extract',
       label: 'DOM Perception',
       status:
-        phase === 'observing'
+        state.phase === 'observing'
           ? 'in_progress'
-          : step > 0 || phase !== 'idle'
+          : (state.step ?? 0) > 0 || (state.phase && state.phase !== 'idle')
             ? 'completed'
             : 'pending',
-      detail: phase === 'observing' ? 'Analyzing DOM...' : 'DOM Extracted',
+      detail: state.phase === 'observing' ? 'Analyzing DOM...' : 'DOM Extracted',
     });
 
     taskList.push({
       id: 'step-kavach',
       label: 'Privacy Guard',
       status:
-        phase === 'sanitizing'
+        state.phase === 'sanitizing'
           ? 'in_progress'
-          : ['sending', 'thinking', 'acting', 'done'].includes(phase) || redactionCount > 0
+          : (state.phase && ['sending', 'thinking', 'acting', 'done'].includes(state.phase)) || (state.redactionCount ?? 0) > 0
             ? 'completed'
             : 'pending',
       detail:
-        redactionCount > 0
-          ? `${redactionCount} Tokenised`
+        (state.redactionCount ?? 0) > 0
+          ? `${state.redactionCount} Tokenised`
           : '0 PII Leaked',
     });
 
@@ -85,33 +81,26 @@ export class TaskProgressWidget {
       id: 'step-reasoning',
       label: 'AI Reasoning',
       status:
-        ['sending', 'thinking'].includes(phase)
+        state.phase && ['sending', 'thinking'].includes(state.phase)
           ? 'in_progress'
-          : phase === 'acting' || phase === 'done'
+          : state.phase === 'acting' || state.phase === 'done'
             ? 'completed'
-            : phase === 'asking'
-              ? 'in_progress'
-              : 'pending',
-      detail:
-        phase === 'thinking'
-          ? 'Generating plan...'
-          : phase === 'asking'
-            ? 'Awaiting input'
-            : 'Planner Standby',
+            : 'pending',
+      detail: state.phase === 'thinking' ? 'Generating plan...' : 'Planner Standby',
     });
 
     taskList.push({
       id: 'step-execution',
       label: 'Action Exec',
       status:
-        phase === 'acting' || phase === 'asking'
+        state.phase === 'acting'
           ? 'in_progress'
-          : phase === 'done'
+          : state.phase === 'done'
             ? 'completed'
-            : phase === 'error' || phase === 'blocked'
+            : state.phase === 'error' || state.phase === 'blocked'
               ? 'failed'
               : 'pending',
-      detail: message || (phase === 'done' ? 'Goal Finished' : 'Ready for prompt'),
+      detail: state.message || (state.phase === 'done' ? 'Goal Finished' : 'Ready for prompt'),
     });
 
     this.tasks = taskList;
@@ -163,30 +152,6 @@ export class TaskProgressWidget {
               <span class="hud-tile-label">[TARGET OBJECTIVE]</span>
               <div class="hud-objective-text" title="${this.escapeHtml(goalText)}">${this.escapeHtml(goalText)}</div>
             </div>
-
-            <!-- Conversational Q&A Card with Save Forever Option -->
-            ${this.currentState?.pendingQuestion ? `
-            <div class="hud-question-card">
-              <div class="hud-q-header">
-                <span class="hud-q-icon">🤖</span>
-                <span class="hud-q-title">INPUT NEEDED</span>
-              </div>
-              <div class="hud-q-text">${this.escapeHtml(this.currentState.pendingQuestion.question)}</div>
-              ${this.currentState.pendingQuestion.options && this.currentState.pendingQuestion.options.length > 0 ? `
-                <div class="hud-q-options">
-                  ${this.currentState.pendingQuestion.options.map(opt => `<button type="button" class="hud-q-opt-btn" data-opt="${this.escapeHtml(opt)}">${this.escapeHtml(opt)}</button>`).join('')}
-                </div>
-              ` : ''}
-              <div class="hud-q-input-row">
-                <input type="text" class="hud-q-text-input" placeholder="Type answer..." />
-                <button type="button" class="hud-btn hud-q-submit-btn">[✓] SUBMIT</button>
-              </div>
-              <label class="hud-q-save-label">
-                <input type="checkbox" class="hud-q-save-cb" checked />
-                <span>💾 Save answer forever for future forms</span>
-              </label>
-            </div>
-            ` : ''}
 
             <!-- 2x2 Watch Dogs Divided Tile Grid -->
             <div class="hud-grid-container">
@@ -281,17 +246,14 @@ export class TaskProgressWidget {
 
       const tabId = this.currentState?.tabId;
 
-      // Update state locally immediately so HUD UI flips to active working phase instantly
-      if (this.currentState) {
-        this.updateState({
-          ...this.currentState,
-          phase: 'observing',
-          goal: val,
-          step: 0,
-          redactionCount: this.currentState.redactionCount ?? 0,
-          message: 'Starting task...',
-        });
-      }
+      this.syncTasksFromAgentState({
+        phase: 'observing',
+        goal: val,
+        step: 0,
+        redactionCount: this.currentState?.redactionCount ?? 0,
+        message: 'Starting task...',
+      });
+      this.render();
 
       browser.runtime
         .sendMessage({
@@ -317,62 +279,6 @@ export class TaskProgressWidget {
         triggerRun();
       }
     });
-
-    // Wire up conversational Q&A from the floating HUD
-    const q = this.currentState?.pendingQuestion;
-    if (q) {
-      const qInput = this.element.querySelector('.hud-q-text-input') as HTMLInputElement | null;
-      const qSubmit = this.element.querySelector('.hud-q-submit-btn');
-      const qSaveCb = this.element.querySelector('.hud-q-save-cb') as HTMLInputElement | null;
-      const optBtns = this.element.querySelectorAll('.hud-q-opt-btn');
-
-      const submitAnswer = (val: string) => {
-        const clean = val.trim();
-        if (!clean) return;
-        const saveForever = qSaveCb?.checked ?? true;
-        if (saveForever) {
-          browser.runtime.sendMessage({
-            kind: 'SAVE_FIELD',
-            fieldKey: q.fieldKey,
-            label: q.fieldKey,
-            value: clean,
-          }).catch(() => {});
-        }
-        browser.runtime.sendMessage({
-          kind: 'ANSWER_QUESTION',
-          tabId: this.currentState?.tabId,
-          fieldKey: q.fieldKey,
-          value: clean,
-        }).catch(() => {});
-
-        this.updateState({
-          ...this.currentState!,
-          phase: 'acting',
-          message: `Filling: ${clean}`,
-          pendingQuestion: undefined,
-        });
-      };
-
-      qSubmit?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (qInput) submitAnswer(qInput.value);
-      });
-
-      qInput?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.stopPropagation();
-          if (qInput) submitAnswer(qInput.value);
-        }
-      });
-
-      optBtns.forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const optVal = btn.getAttribute('data-opt');
-          if (optVal) submitAnswer(optVal);
-        });
-      });
-    }
   }
 
   private escapeHtml(str: string): string {

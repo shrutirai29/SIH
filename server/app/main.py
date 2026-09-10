@@ -15,7 +15,6 @@ independently, every time.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import time
@@ -26,16 +25,16 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from dotenv import load_dotenv
 
-# The prompt itself now comes from `mantri.prompts`, which composes this contract with
-# MANTRI's sub-goal and recovery sections (ticket G1).
-from app.agents.grounder import build_user_prompt, make_validator
+load_dotenv()
+
+from app.agents.grounder import build_user_prompt, make_validator, system_prompt
 from app.guards.ingress_pii import contains_pii, first_class
 from app.guards.image_sanity import check_image_sanity
 from app.llm.client import LlmClient, LlmError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.ssg import SanitizedScreenGraph
-from mantri import MantriConfig, SubGoalCache, plan_step
 
 SUPPORTED_SSG_MAJOR = "1"
 
@@ -57,33 +56,14 @@ app.add_middleware(
 
 llm = LlmClient()
 
-# MANTRI's reasoning layer (EPIC G). The cache is process-local and TTL-bounded; it
-# becomes the Redis session store when F6 lands, which is why nothing else reaches
-# into it.
-mantri_config = MantriConfig()
-subgoal_cache = SubGoalCache(mantri_config.planner)
-
 # Measured, never assumed (see llm/client.py). Reported at /v1/metrics.
-_stats: dict[str, Any] = {
+_stats = {
     "requests": 0,
     "plans": 0,
     "schema_first_try": 0,
     "retries": 0,
     "redactor_failures": 0,
     "by_mode": {},
-    # MANTRI (EPIC G). Counted, not claimed: the injection tally is what lets us say
-    # how often a real page attacks the agent instead of guessing.
-    "by_route": {},
-    "planner_calls": 0,
-    "injection_suspicious": 0,
-    "injection_hostile": 0,
-    "recovered_to_ask_user": 0,
-    # The two costs MANTRI is allowed to incur on the user's latency budget: a planner
-    # call that ran out of budget, and a step retried on the vision model because the
-    # text description did not ground. Both are counted so the budget argument can be
-    # settled with numbers when H6 lands.
-    "planner_timeouts": 0,
-    "escalated_to_vision": 0,
 }
 
 
@@ -124,24 +104,6 @@ async def models() -> dict[str, Any]:
             "docker compose serves the same weights via vLLM."
         ),
     }
-
-
-@app.get("/demo")
-async def demo_portal() -> Response:
-    """Serves the test government portal locally over standard HTTP.
-
-    This avoids Chrome file:// scheme restrictions on unpacked extensions.
-    """
-    portal_file = (
-        Path(__file__).resolve().parents[2]
-        / "packages"
-        / "eval"
-        / "fixtures"
-        / "demo-portal.html"
-    )
-    if not portal_file.exists():
-        return JSONResponse({"error": "PORTAL_NOT_FOUND"}, status_code=404)
-    return Response(content=portal_file.read_bytes(), media_type="text/html")
 
 
 @app.get("/v1/metrics")
@@ -195,6 +157,7 @@ async def agent_step(request: Request) -> Response:
         SanitizedScreenGraph.model_validate(body)
     except ValidationError as exc:
         first = exc.errors()[0]
+        print(f"[SSG_INVALID] {first['loc']}: {first['msg']}", flush=True)
         return JSONResponse(
             {
                 "error": "SSG_INVALID",
@@ -222,51 +185,6 @@ async def agent_step(request: Request) -> Response:
             status_code=422,
         )
 
-    # ---- image sanity guard (ticket F5) ------------------------------------
-    image_data_url: str | None = None
-    attachment = body.get("attachment")
-    if attachment and isinstance(attachment, dict):
-        raw_img = (
-            attachment.get("data")
-            or (attachment.get("screenshot", {}).get("data") if isinstance(attachment.get("screenshot"), dict) else None)
-            or attachment.get("data_url")
-            or (attachment.get("screenshot", {}).get("data_url") if isinstance(attachment.get("screenshot"), dict) else None)
-        )
-        if raw_img:
-            if isinstance(raw_img, bytes):
-                img_bytes = raw_img
-                b64_part = base64.b64encode(img_bytes).decode("ascii")
-                mime = "image/png"
-            elif isinstance(raw_img, str):
-                if raw_img.startswith("data:"):
-                    header, _, b64_part = raw_img.partition(",")
-                    mime = header.split(";")[0].replace("data:", "").strip() or "image/png"
-                else:
-                    b64_part = raw_img
-                    mime = "image/png"
-                try:
-                    img_bytes = base64.b64decode(b64_part)
-                except Exception:
-                    return JSONResponse(
-                        {"error": "IMAGE_INVALID", "detail": "failed to decode base64 image data"},
-                        status_code=422,
-                    )
-            else:
-                return JSONResponse(
-                    {"error": "IMAGE_INVALID", "detail": "unsupported image data type"},
-                    status_code=422,
-                )
-
-            # Validate structural sanity
-            sanity = check_image_sanity(img_bytes)
-            if not sanity.ok:
-                return JSONResponse(
-                    {"error": "IMAGE_INVALID", "detail": sanity.detail},
-                    status_code=422,
-                )
-
-            image_data_url = f"data:{mime};base64,{b64_part.strip()}"
-
     if not llm.config.configured:
         return JSONResponse(
             {
@@ -276,70 +194,42 @@ async def agent_step(request: Request) -> Response:
             status_code=503,
         )
 
-    # ---- plan (MANTRI, EPIC G) ---------------------------------------------
-    #
-    # Injection screen, routing, sub-goal, prompt assembly, recovery: all of it lives
-    # in `mantri/` and none of it lives here. This handler's remaining job is the HTTP
-    # envelope and the metrics.
+    # ---- plan --------------------------------------------------------------
     try:
-        decision = await plan_step(
-            body,
-            llm=llm,
-            action_plan_schema=ACTION_PLAN_SCHEMA,
-            build_user_prompt=build_user_prompt,
-            make_validator=lambda ssg: make_validator(ssg, _plan_schema_validate),
-            cache=subgoal_cache,
-            config=mantri_config,
-            image_data_url=image_data_url,
-            contains_pii=contains_pii,
+        result = await llm.complete(
+            system=system_prompt(),
+            user=build_user_prompt(body),
+            schema=ACTION_PLAN_SCHEMA,
+            validate=make_validator(body, _plan_schema_validate),
         )
     except LlmError as exc:
         return JSONResponse(
             {"error": "MODEL_UNAVAILABLE", "detail": str(exc)}, status_code=503
         )
 
-    plan = dict(decision.plan)
+    plan = dict(result.plan)
     # The client correlates on trace_id; a model that omits or invents one would
     # otherwise strand the step.
     plan["trace_id"] = body.get("trace_id", "t_0")
     plan.setdefault("plan_id", "p_" + str(body.get("step", 0)))
 
     _stats["plans"] += 1
-    if decision.attempts == 1:
+    if result.attempts == 1:
         _stats["schema_first_try"] += 1
     else:
-        _stats["retries"] += decision.attempts - 1
-    _stats["by_mode"][decision.mode] = _stats["by_mode"].get(decision.mode, 0) + 1
+        _stats["retries"] += result.attempts - 1
+    _stats["by_mode"][result.mode.value] = _stats["by_mode"].get(result.mode.value, 0) + 1
 
-    route_name = decision.route.path.value
-    _stats["by_route"][route_name] = _stats["by_route"].get(route_name, 0) + 1
-    if decision.planner_called:
-        _stats["planner_calls"] += 1
-    if decision.injection.verdict.value == "hostile":
-        _stats["injection_hostile"] += 1
-    elif decision.injection.verdict.value == "suspicious":
-        _stats["injection_suspicious"] += 1
-    if decision.recovered:
-        _stats["recovered_to_ask_user"] += 1
-    if decision.planner_timed_out:
-        _stats["planner_timeouts"] += 1
-    if decision.escalated:
-        _stats["escalated_to_vision"] += 1
-
-    # The injection verdict is logged as families and field paths, never as the text
-    # that matched (mantri/injection.py explains why).
     print(
-        "[step] trace={} step={} tier={} elements={} -> {} ({}, {} attempt(s), {}ms) "
-        "mantri={}".format(
+        "[step] trace={} step={} tier={} elements={} -> {} ({}, {} attempt(s), {}ms)".format(
             body.get("trace_id"),
             body.get("step"),
             body.get("tier"),
             len(body.get("elements", [])),
             ",".join(a.get("op", "?") for a in plan.get("actions", [])),
-            decision.mode,
-            decision.attempts,
+            result.mode.value,
+            result.attempts,
             int((time.monotonic() - started) * 1000),
-            json.dumps(decision.to_log(), ensure_ascii=False),
         ),
         flush=True,
     )

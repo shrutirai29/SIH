@@ -33,11 +33,29 @@ export interface DeviceProfile {
 }
 
 /**
- * Capability probe. Runs the matmul micro-benchmark and detects GPU/WASM capabilities
- * (ticket C1) to honestly categorize device performance and configure latency budgets.
+ * Capability probe. The real version runs a matmul micro-benchmark and one detector
+ * pass (ticket C1); this one reports honestly on what the environment exposes.
  */
 export async function probeDevice(): Promise<DeviceProfile> {
-  return probeDeviceWithBenchmark();
+  const cores = typeof navigator === 'undefined' ? 1 : navigator.hardwareConcurrency;
+  const gpu = (globalThis.navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } })
+    ?.gpu;
+
+  if (gpu === undefined) {
+    return { deviceClass: 'C', ep: 'wasm', cores, tier2BudgetMs: 1200 };
+  }
+
+  try {
+    const adapter = await gpu.requestAdapter();
+    if (adapter === null) {
+      return { deviceClass: 'C', ep: 'wasm', cores, tier2BudgetMs: 1200 };
+    }
+    // Without the micro-benchmark we cannot tell A from B, so we claim the more
+    // conservative of the two. Over-claiming device class costs latency budget.
+    return { deviceClass: 'B', ep: 'webgpu', cores, tier2BudgetMs: 450 };
+  } catch {
+    return { deviceClass: 'C', ep: 'wasm', cores, tier2BudgetMs: 1200 };
+  }
 }
 
 /* ------------------------------------------------------------- inference host */
@@ -108,41 +126,35 @@ export interface TierDecision {
   readonly why: readonly string[];
 }
 
-import { evaluateApcTier } from './apc.js';
-import { probeDeviceWithBenchmark } from './vision/probe.js';
-
 /**
- * Tier selection via the Adaptive Perception Controller (ticket C12).
- * Consumes DOM stability, visual delta, unexplained pixel ratio, and failure counts
- * to intelligently route execution to Tier 0, Tier 1, or Tier 2.
+ * Tier selection.
+ *
+ * STATUS: fixed policy. The scored controller from ARCHITECTURE.md sec 8, with weights
+ * fitted on the eval corpus, is ticket C12. Until the vision stack exists there is
+ * nothing to escalate TO, so returning anything but Tier 1 would be theatre.
  */
 export function chooseTier(s: ApcSignals): TierDecision {
-  return evaluateApcTier(s);
+  const why: string[] = [];
+
+  if (s.tierCeiling === 0) {
+    why.push('tier ceiling pinned to 0 by policy');
+    return { tier: 0, budgets: { perceiveMs: 0, detectMs: 60, redactMs: 40 }, why };
+  }
+
+  why.push('fixed tier-1 policy (adaptive controller is ticket C12)');
+  const slow = s.deviceClass === 'C';
+  if (slow) why.push('device class C: budgets relaxed');
+
+  return {
+    tier: 1,
+    budgets: {
+      perceiveMs: 0,
+      detectMs: slow ? 240 : 60,
+      redactMs: slow ? 160 : 40,
+    },
+    why,
+  };
 }
 
-export { probeDeviceWithBenchmark } from './vision/probe.js';
-export {
-  computeDHash,
-  computePHashDelta,
-  computeTileDiff,
-  type TileDiffResult,
-} from './vision/diff.js';
-export {
-  computeCoverageMask,
-  type CoverageResult,
-} from './vision/coverage.js';
-export {
-  WidgetDetector,
-  reconcileWidgetsWithDom,
-  computeBoxIou,
-  type DomElementRef,
-  type ReconciliationReport,
-  type ReconciledWidgetMatch,
-} from './vision/widgets.js';
-export {
-  OcrEngine,
-  type OcrDetectionOptions,
-} from './vision/ocr.js';
-export { evaluateApcTier, type ApcEvaluationWeights } from './apc.js';
 export { NetraInferenceHost } from './host/netra-host.js';
 export { MediaPipeFaceDetector } from './mediapipe/face-detector.js';
